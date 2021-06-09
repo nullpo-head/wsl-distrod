@@ -1,5 +1,6 @@
 //
-//    Copyright (C) Microsoft.  All rights reserved.
+//    Copyright (C) Takaya Saeki
+//    Copyright (C) Microsoft
 // Licensed under the terms described in the LICENSE file in the root of this project.
 //
 

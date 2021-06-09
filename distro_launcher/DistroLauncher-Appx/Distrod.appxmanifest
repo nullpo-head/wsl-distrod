@@ -1,9 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap mp uap2 uap3 rescap desktop">
-  <Identity Name="WSL-DistroLauncher" Version="1.0.0.0" Publisher="CN=nullpo-head" ProcessorArchitecture="x64" />
+  <Identity Name="Distrod" Version="1.0.0.0" Publisher="CN=nullpo-head" ProcessorArchitecture="x64" />
   <mp:PhoneIdentity PhoneProductId="160867c6-4e75-4e36-85c6-1543de07d5f3" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties>
-    <DisplayName>WSL-DistroLauncher</DisplayName>
+    <DisplayName>Distrod</DisplayName>
     <PublisherDisplayName>Windows Console Dev Team</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -18,7 +18,7 @@
   </Resources>
   <Applications>
     <Application Id="distrod" Executable="distrod.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="WSL-DistroLauncher" Description="My Own Distro Launcher" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" BackgroundColor="transparent">
+      <uap:VisualElements DisplayName="Distrod" Description="The WSL Distro with Systemd running." Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" BackgroundColor="transparent">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square310x310Logo="Assets\LargeTile.png" Square71x71Logo="Assets\SmallTile.png">
         </uap:DefaultTile>
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
