@@ -1,9 +1,15 @@
+use anyhow::Result;
+use anyhow::{bail, Context};
 use colored::*;
+use distro::Distro;
 use std::io::Write;
 use std::str::FromStr;
 
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
+
+mod container;
+mod distro;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -32,12 +38,38 @@ pub enum Subcommand {
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
-pub struct LaunchOpts {}
+pub struct LaunchOpts {
+    root_fs: String,
+}
 
 fn main() {
     let opts = Opts::from_args();
     init_logger(&opts.log_level);
-    log::info!("Hello, world!");
+
+    if let Err(err) = run(opts) {
+        log::error!("{:?}", err);
+    }
+}
+
+fn run(opts: Opts) -> Result<()> {
+    match opts.command {
+        Subcommand::Launch(launch_opts) => launch_distro(launch_opts),
+    }
+}
+
+fn launch_distro(opts: LaunchOpts) -> Result<()> {
+    let distro = Distro::get_installed_distro(&opts.root_fs)
+        .with_context(|| "Failed to retrieve the installed distro.")?;
+    if distro.is_none() {
+        bail!(
+            "Any distribution is not installed in '{}' for Distrod.",
+            &opts.root_fs
+        )
+    }
+    let mut distro = distro.unwrap();
+    distro
+        .launch()
+        .with_context(|| "Failed to launch the distro.")
 }
 
 fn init_logger(log_level: &Option<LogLevel>) {
