@@ -21,7 +21,7 @@ impl Distro {
 
     pub fn launch(&mut self) -> Result<()> {
         self.container
-            .launch(None)
+            .launch(None, "/mnt/ditrod_root")
             .with_context(|| "Failed to launch a container.")
     }
 }
