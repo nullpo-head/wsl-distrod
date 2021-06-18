@@ -1,5 +1,5 @@
 use std::ffi::CString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use nix::sched::CloneFlags;
@@ -8,18 +8,17 @@ use nix::NixPath;
 use anyhow::{bail, Context, Result};
 
 pub struct Container {
-    root_fs: PathBuf,
+    root_fs: PathBuf,  // absolute path in the host mount namespaces
 }
 
 impl Container {
     pub fn new<P: AsRef<Path>>(root_fs: P) -> Result<Self> {
         Ok(Container {
-            root_fs: PathBuf::from(root_fs.as_ref()),
+            root_fs: fs::canonicalize(root_fs.as_ref()).with_context(|| format!("invalid root_fs path: '{:?}'", root_fs.as_ref()))?,
         })
     }
 
     pub fn launch<P: AsRef<Path>>(&mut self, init: Option<Vec<String>>, old_root: P) -> Result<()> {
-        let old_root = self.root_fs.join(old_root.as_ref().strip_prefix("/")?);
         let fork_result = unsafe {nix::unistd::fork().with_context(|| "Fork failed")?};
         if fork_result.is_child() {
             let init = init.unwrap_or(vec!["/sbin/init".to_owned(), "--unit=multi-user.target".to_owned()]);
@@ -46,25 +45,25 @@ impl Container {
     }
 
     fn prepare_minimum_root<P: AsRef<Path>>(&self, old_root: P) -> Result<()> {
+        let old_root_as_hostpath = self.root_fs.join(old_root.as_ref().strip_prefix("/")?);
         nix::mount::mount::<Path, Path, Path, Path>(Some(&self.root_fs), &self.root_fs, None, nix::mount::MsFlags::MS_BIND, None).with_context(|| "Failed to bind mount the old_root")?;
-        let b = PathBuf::from(old_root.as_ref());
-        std::env::set_current_dir(&self.root_fs).with_context(|| format!("Failed to cd {:#?}", &self.root_fs))?;
-        nix::unistd::pivot_root(".", old_root.as_ref()).with_context(|| format!("pivot_root failed. new: {:#?}, old: {:#?}", &self.root_fs, &old_root.as_ref()))?;
+        nix::unistd::pivot_root(&self.root_fs, &old_root_as_hostpath).with_context(|| format!("pivot_root failed. new: {:#?}, old: {:#?}", self.root_fs.as_path(), old_root_as_hostpath.as_path()))?;
         nix::mount::mount::<Path, Path, Path, Path>(None, "/proc".as_ref(), Some("proc".as_ref()), nix::mount::MsFlags::empty(), None).with_context(|| "mount /proc failed.")?;
+        nix::mount::mount::<Path, Path, Path, Path>(None, "/tmp".as_ref(), Some("tmpfs".as_ref()), nix::mount::MsFlags::empty(), None).with_context(|| "mount /proc failed.")?;
         Ok(())
     }
 
     fn mount_wsl_mountpoints<P: AsRef<Path>>(&self, old_root: P, mount_entries: &Vec<MountEntry>) -> Result<()> {
         let mut old_root = PathBuf::from(old_root.as_ref());
-        let binds = ["init", "proc/sys/fs/binfmt_misc", "run", "tmp"];
+        let binds = ["/init", "/proc/sys/fs/binfmt_misc", "/run", "/tmp"];
         for bind in binds.iter() {
             let num_dirs = bind.matches('/').count();
-            old_root.push(bind);
+            old_root.push(&bind[1..]);
             if !old_root.exists() {
                 log::debug!("WSL path {:?} does not exist", old_root.to_str());
                 continue;
             }
-            nix::mount::mount::<Path, Path, Path, Path>(Some(old_root.as_path()), bind.as_ref(), None, nix::mount::MsFlags::MS_BIND, None).with_context(|| "Failed to mount the WSL's special dirs")?;
+            nix::mount::mount::<Path, Path, Path, Path>(Some(old_root.as_path()), bind.as_ref(), None, nix::mount::MsFlags::MS_BIND, None).with_context(|| format!("Failed to mount the WSL's special dir: {:?} -> {}", old_root.as_path(), bind))?;
             for _ in 0..num_dirs {
                 old_root.pop();
             }
@@ -72,6 +71,7 @@ impl Container {
 
         let mut init = old_root.clone();
         init.push("init");
+        let root = PathBuf::from("/");
         for mount_entry in mount_entries {
             let path = &mount_entry.path;
             if !path.starts_with(&old_root) {
@@ -83,8 +83,11 @@ impl Container {
             if *path == init {  // /init is also mounted by 9p, but we have already mounted it.
                 continue;
             }
-            let path = path.strip_prefix(&old_root).with_context(|| format!("Unexpected error. strip_prefix failed for {:?}", &path))?;
-            nix::mount::mount::<Path, Path, Path, Path>(Some(path), path.as_ref(), None, nix::mount::MsFlags::MS_BIND, None).with_context(|| "Failed to mount the Windows drives")?;
+            let path_inside_container = root.join(path.strip_prefix(&old_root).with_context(|| format!("Unexpected error. strip_prefix failed for {:?}", &path))?);
+            if !path_inside_container.exists() {
+                fs::create_dir_all(&path_inside_container).with_context(|| format!("Failed to create a mount point directory for {:?} inside the container.", &path_inside_container))?;
+            }
+            nix::mount::mount::<Path, Path, Path, Path>(Some(path), path_inside_container.as_ref(), None, nix::mount::MsFlags::MS_BIND, None).with_context(|| format!("Failed to mount the Windows drives: {:?} -> {:?}", path.as_path(), path_inside_container))?;
         }
         Ok(())
     }
