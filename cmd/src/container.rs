@@ -93,6 +93,17 @@ impl Container {
     }
 
     fn umount_host_mountpoints<P: AsRef<Path>>(&self, old_root: P, mount_entries: &Vec<MountEntry>) -> Result<()> {
+        let mut mount_paths: Vec<&PathBuf> = mount_entries.iter().map(|e| &e.path).collect();
+        mount_paths.sort_by(|a, b| b.len().cmp(&a.len()));
+        for mount_path in mount_paths {
+            if !mount_path.starts_with(&old_root) || mount_path.as_path() == old_root.as_ref() {
+                continue;
+            }
+            let err = nix::mount::umount(mount_path.as_path());
+            if err.is_err() {
+                log::warn!("Failed to unmount '{:?}'", mount_path.as_path());
+            }
+        }
         Ok(())
     }
 
