@@ -2,6 +2,7 @@ use anyhow::Result;
 use anyhow::{bail, Context};
 use colored::*;
 use distro::Distro;
+use nix;
 use std::io::Write;
 use std::str::FromStr;
 
@@ -52,6 +53,9 @@ fn main() {
 }
 
 fn run(opts: Opts) -> Result<()> {
+    if !nix::unistd::getuid().is_root() {
+        bail!("Distrod needs the root permission.");
+    }
     match opts.command {
         Subcommand::Launch(launch_opts) => launch_distro(launch_opts),
     }
