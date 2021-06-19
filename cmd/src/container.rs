@@ -25,7 +25,7 @@ impl Container {
             daemonize().with_context(|| "The container failed to be daemonized.")?;
             self.prepare_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
             self.prepare_filesystem(&old_root).with_context(|| "Failed to initialize the container's filesystem.")?;
-            self.launch_init(init);
+            self.launch_init(init).with_context(|| "Launching init failed unexpectedly.")?;
         }
         std::thread::sleep(std::time::Duration::from_secs(30));
         Ok(())
@@ -55,7 +55,7 @@ impl Container {
 
     fn mount_wsl_mountpoints<P: AsRef<Path>>(&self, old_root: P, mount_entries: &Vec<MountEntry>) -> Result<()> {
         let mut old_root = PathBuf::from(old_root.as_ref());
-        let binds = ["/init", "/proc/sys/fs/binfmt_misc", "/run", "/tmp"];
+        let binds = ["/init", "/proc/sys/fs/binfmt_misc", "/run", "/run/lock", "/run/shm", "/run/user", "/mnt/wsl", "/tmp"];
         for bind in binds.iter() {
             let num_dirs = bind.matches('/').count();
             old_root.push(&bind[1..]);
@@ -96,9 +96,9 @@ impl Container {
         Ok(())
     }
 
-    fn launch_init(&self, init: Vec<String>) -> ! {
-        nix::unistd::execv(&CString::new("/bin/bash").unwrap(), &[CString::new("/bin/bash").unwrap()]).unwrap();
-        std::process::exit(1);
+    fn launch_init(&self, init: Vec<String>) -> Result<()> {
+        std::process::Command::new("/bin/bash").spawn()?;
+        Ok(())
     }
 }
 
