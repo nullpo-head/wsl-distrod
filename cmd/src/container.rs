@@ -1,12 +1,11 @@
-use std::ffi::CString;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use nix::sched::CloneFlags;
 use nix::NixPath;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 pub struct Container {
     root_fs: PathBuf,  // absolute path in the host mount namespaces
