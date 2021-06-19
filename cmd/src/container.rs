@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use nix::sched::CloneFlags;
 use nix::NixPath;
@@ -19,15 +20,21 @@ impl Container {
     }
 
     pub fn launch<P: AsRef<Path>>(&mut self, init: Option<Vec<String>>, old_root: P) -> Result<()> {
-        let fork_result = unsafe {nix::unistd::fork().with_context(|| "Fork failed")?};
+        let (sync_read, sync_write) = nix::unistd::pipe()?;
+        let (mut sync_read, mut sync_write) = unsafe { (File::from_raw_fd(sync_read), File::from_raw_fd(sync_write)) };
+        let fork_result = unsafe { nix::unistd::fork().with_context(|| "Fork failed")? };
         if fork_result.is_child() {
             let init = init.unwrap_or(vec!["/sbin/init".to_owned(), "--unit=multi-user.target".to_owned()]);
             daemonize().with_context(|| "The container failed to be daemonized.")?;
             self.prepare_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
             self.prepare_filesystem(&old_root).with_context(|| "Failed to initialize the container's filesystem.")?;
             self.launch_init(init).with_context(|| "Launching init failed unexpectedly.")?;
+            write!(&mut sync_write, "").with_context(|| "Failed to write to the sync pipe")?;
+            std::process::exit(0);
         }
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        drop(sync_write);  // Let it be held only by the child
+        let mut _buf = vec![];
+        let _ = sync_read.read_to_end(&mut _buf);
         Ok(())
     }
 
