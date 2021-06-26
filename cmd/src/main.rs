@@ -35,12 +35,23 @@ pub enum LogLevel {
 #[derive(Debug, StructOpt)]
 pub enum Subcommand {
     Launch(LaunchOpts),
+    Exec(ExecOpts),
 }
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct LaunchOpts {
     root_fs: String,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab")]
+pub struct ExecOpts {
+    command: String,
+    args: Vec<String>,
+
+    #[structopt(short, long)]
+    working_directory: Option<String>,
 }
 
 fn main() {
@@ -50,30 +61,6 @@ fn main() {
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
     }
-}
-
-fn run(opts: Opts) -> Result<()> {
-    if !nix::unistd::getuid().is_root() {
-        bail!("Distrod needs the root permission.");
-    }
-    match opts.command {
-        Subcommand::Launch(launch_opts) => launch_distro(launch_opts),
-    }
-}
-
-fn launch_distro(opts: LaunchOpts) -> Result<()> {
-    let distro = Distro::get_installed_distro(&opts.root_fs)
-        .with_context(|| "Failed to retrieve the installed distro.")?;
-    if distro.is_none() {
-        bail!(
-            "Any distribution is not installed in '{}' for Distrod.",
-            &opts.root_fs
-        )
-    }
-    let mut distro = distro.unwrap();
-    distro
-        .launch()
-        .with_context(|| "Failed to launch the distro.")
 }
 
 fn init_logger(log_level: &Option<LogLevel>) {
@@ -105,4 +92,44 @@ fn init_logger(log_level: &Option<LogLevel>) {
         )
     });
     env_logger_builder.init();
+}
+
+fn run(opts: Opts) -> Result<()> {
+    if !nix::unistd::getuid().is_root() {
+        bail!("Distrod needs the root permission.");
+    }
+    match opts.command {
+        Subcommand::Launch(launch_opts) => {
+            launch_distro(launch_opts)?;
+        }
+        Subcommand::Exec(exec_opts) => {
+            exec_command(exec_opts)?;
+        }
+    }
+    Ok(())
+}
+
+fn launch_distro(opts: LaunchOpts) -> Result<()> {
+    let distro = Distro::get_installed_distro(&opts.root_fs)
+        .with_context(|| "Failed to retrieve the installed distro.")?;
+    if distro.is_none() {
+        bail!(
+            "Any distribution is not installed in '{}' for Distrod.",
+            &opts.root_fs
+        )
+    }
+    let mut distro = distro.unwrap();
+    distro
+        .launch()
+        .with_context(|| "Failed to launch the distro.")
+}
+
+fn exec_command(opts: ExecOpts) -> Result<()> {
+    let distro = Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    if distro.is_none() {
+        bail!("No distro is currently running.");
+    }
+    let distro = distro.unwrap();
+    let status = distro.exec_command(&opts.command, &opts.args, opts.working_directory)?;
+    std::process::exit(status as i32)
 }

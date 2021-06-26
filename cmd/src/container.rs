@@ -1,39 +1,70 @@
+use passfd::FdPassingExt;
+use serde::{Deserialize, Serialize};
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use nix::fcntl::OFlag;
 use nix::sched::CloneFlags;
 use nix::NixPath;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Container {
     root_fs: PathBuf,  // absolute path in the host mount namespaces
+    init_pid: Option<u32>,
 }
 
 impl Container {
     pub fn new<P: AsRef<Path>>(root_fs: P) -> Result<Self> {
         Ok(Container {
             root_fs: fs::canonicalize(root_fs.as_ref()).with_context(|| format!("invalid root_fs path: '{:?}'", root_fs.as_ref()))?,
+            init_pid: None,
         })
     }
 
+    /// Export the infromation of this container in JSON format, 
+    /// which can be used to restore Container struct
+    pub fn run_info_as_json(&self) -> Result<String> {
+        Ok(serde_json::to_string(&self)?)
+    }
+
+    /// Get Container struct of an existing container from JSON
+    pub fn get_running_container_from_json(json: &str) -> Result<Option<Container>> {
+        // TODO: liveness check
+        Ok(Some(serde_json::from_str(json)?))
+    }
+
     pub fn launch<P: AsRef<Path>>(&mut self, init: Option<Vec<String>>, old_root: P) -> Result<()> {
-        let (sync_read, sync_write) = nix::unistd::pipe()?;
-        let (mut sync_read, mut sync_write) = unsafe { (File::from_raw_fd(sync_read), File::from_raw_fd(sync_write)) };
-        let fork_result = unsafe { nix::unistd::fork().with_context(|| "Fork failed")? };
-        if fork_result.is_child() {
-            let init = init.unwrap_or(vec!["/sbin/init".to_owned(), "--unit=multi-user.target".to_owned()]);
-            daemonize().with_context(|| "The container failed to be daemonized.")?;
-            self.prepare_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
-            self.prepare_filesystem(&old_root).with_context(|| "Failed to initialize the container's filesystem.")?;
-            self.launch_init(init).with_context(|| "Launching init failed unexpectedly.")?;
-            write!(&mut sync_write, "").with_context(|| "Failed to write to the sync pipe")?;
-            std::process::exit(0);
-        }
-        drop(sync_write);  // Let it be held only by the child
-        let mut _buf = vec![];
-        let _ = sync_read.read_to_end(&mut _buf);
+        let init = init.unwrap_or(vec!["/sbin/init".to_owned(), "--unit=multi-user.target".to_owned()]);
+        let init = vec!["/bin/bash"];
+        let pidfd_file = {
+            let mut command = Command::new(&init[0]);
+            command.args(&init[1..]);
+            let mut command = CommandWithDoubleFork::new(command);
+            command.pre_second_fork(|| {
+                daemonize().with_context(|| "The container failed to be daemonized.")?;
+                self.prepare_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
+                self.prepare_filesystem(&old_root).with_context(|| "Failed to initialize the container's filesystem.")?;
+                Ok(())
+            });
+            command.spawn()?
+        };
+        let stat_fd = nix::fcntl::openat(pidfd_file.as_raw_fd(),
+                                         "stat",
+                                         OFlag::O_RDONLY,
+                                         nix::sys::stat::Mode::empty()).with_context(|| "Failed to open the stat file.")?;
+        let mut stat_file = unsafe { File::from_raw_fd(stat_fd) };
+        let mut stat_cont = String::new();
+        stat_file.read_to_string(&mut stat_cont)?;
+        let pid = stat_cont.split(' ').nth(0).ok_or_else(|| anyhow!("Failed to read pid from the stat file."))?
+                                             .parse().with_context(|| "Failed to parse the pid.")?;
+        self.init_pid = Some(pid);
         Ok(())
     }
 
@@ -112,15 +143,63 @@ impl Container {
         }
         Ok(())
     }
-
-    fn launch_init(&self, init: Vec<String>) -> Result<()> {
-        std::process::Command::new("/bin/bash").spawn()?;
-        Ok(())
-    }
 }
 
 fn daemonize() -> Result<()> {
     Ok(())
+}
+
+struct CommandWithDoubleFork<'a> {
+    command: Command,
+    pre_second_fork: Option<Box<dyn FnMut() -> Result<()> + 'a>>
+}
+
+impl<'a> CommandWithDoubleFork<'a> {
+    fn new(command: Command) -> CommandWithDoubleFork<'a> {
+        CommandWithDoubleFork { command, pre_second_fork: None }
+    }
+
+    fn pre_second_fork<F>(&mut self, f: F) -> &mut CommandWithDoubleFork<'a>
+      where F: FnMut() -> Result<()> + 'a {
+        self.pre_second_fork = Some(Box::new(f));
+        self
+    }
+
+    fn spawn(&mut self) -> Result<File> {
+        let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
+        unsafe {
+            self.command.pre_exec(move || {
+                let inner = || -> Result<()> {
+                    let pidfd = nix::fcntl::open("/proc/self", 
+                        OFlag::O_RDONLY | OFlag::O_CLOEXEC,
+                        nix::sys::stat::Mode::empty())?;
+                    fd_channel_child.send_fd(pidfd).with_context(|| "Failed to do send_fd.")?;
+                    Ok(())
+                };
+                if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
+                    log::error!("{:?}", err);
+                    std::process::exit(0);
+                }
+                Ok(())
+            });
+        }
+        if unsafe { nix::unistd::fork().with_context(|| "The first fork failed")? }.is_child() {
+            let mut inner = || -> Result<()> {
+                if let Some(ref mut f) = self.pre_second_fork {
+                    f().with_context(|| "Pre_second_fork failed.")?;
+                }
+                self.command.spawn().with_context(|| "Failed to spawn command.")?;
+                Ok(())
+            };
+            if let Err(err) = inner() {
+                log::error!("{:?}", err);
+            }
+            std::process::exit(0);
+        }
+        let pidfd_fd = fd_channel_host.recv_fd().with_context(|| "Failed to do recv_fd.")?;
+        let pidfd_file = unsafe { File::from_raw_fd(pidfd_fd) };
+        Ok(pidfd_file)
+    }
 }
 
 struct MountEntry {
