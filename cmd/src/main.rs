@@ -2,7 +2,6 @@ use anyhow::Result;
 use anyhow::{bail, Context};
 use colored::*;
 use distro::Distro;
-use nix;
 use std::io::Write;
 use std::str::FromStr;
 
@@ -11,6 +10,8 @@ use strum::{EnumString, EnumVariantNames};
 
 mod container;
 mod distro;
+mod procfile;
+mod multifork;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -130,6 +131,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
         bail!("No distro is currently running.");
     }
     let distro = distro.unwrap();
+    log::debug!("Executing a command in the distro.");
     let status = distro.exec_command(&opts.command, &opts.args, opts.working_directory)?;
     std::process::exit(status as i32)
 }

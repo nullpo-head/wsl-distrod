@@ -1,10 +1,10 @@
-use anyhow::bail;
+use anyhow::{bail, Context, Result};
+use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 
 use crate::container::Container;
 
@@ -46,22 +46,27 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
-        self.container
+        let (mut waiter, _) = self.container
             .launch(None, "/mnt/distrod_root")
             .with_context(|| "Failed to launch a container.")?;
         self.export_run_info()?;
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        waiter.wait()?;
         Ok(())
     }
 
-    pub fn exec_command<'a, I, S, T, P>(&self, command: S, args: I, wd: Option<P>) -> Result<u32>
+    pub fn exec_command<I, S, T, P>(&self, command: S, args: I, wd: Option<P>) -> Result<u32>
     where 
-        I: IntoIterator<Item = &'a T>,
-        S: AsRef<str>,
-        T: AsRef<str> + 'a,
+        I: IntoIterator<Item = T>,
+        S: AsRef<OsStr>,
+        T: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        Ok(0)
+        log::debug!("Distro::exec_command.");
+        let mut waiter = self.container.exec_command(command, args, wd)
+                                       .with_context(|| "Failed to exec command in the container")?;
+        log::debug!("Waiter waits.");
+        let exit_code = waiter.wait().with_context(|| "Failed to wait for the command.")?;
+        Ok(exit_code)
     }
 
     fn export_run_info(&self) -> Result<()> {
