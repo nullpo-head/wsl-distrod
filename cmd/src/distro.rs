@@ -69,6 +69,10 @@ impl Distro {
         Ok(exit_code)
     }
 
+    pub fn stop(self, sigkill: bool) -> Result<()> {
+        self.container.stop(sigkill)
+    }
+
     fn export_run_info(&self) -> Result<()> {
         if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
             fs::remove_file(&DISTRO_RUN_INFO_PATH)

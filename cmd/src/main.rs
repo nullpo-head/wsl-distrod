@@ -37,6 +37,7 @@ pub enum LogLevel {
 pub enum Subcommand {
     Launch(LaunchOpts),
     Exec(ExecOpts),
+    Stop(StopOpts),
 }
 
 #[derive(Debug, StructOpt)]
@@ -53,6 +54,13 @@ pub struct ExecOpts {
 
     #[structopt(short, long)]
     working_directory: Option<String>,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab")]
+pub struct StopOpts {
+    #[structopt(short = "9", long)]
+    sigkill: bool,
 }
 
 fn main() {
@@ -106,6 +114,9 @@ fn run(opts: Opts) -> Result<()> {
         Subcommand::Exec(exec_opts) => {
             exec_command(exec_opts)?;
         }
+        Subcommand::Stop(stop_opts) => {
+            stop_distro(stop_opts)?;
+        }
     }
     Ok(())
 }
@@ -134,4 +145,14 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     log::debug!("Executing a command in the distro.");
     let status = distro.exec_command(&opts.command, &opts.args, opts.working_directory)?;
     std::process::exit(status as i32)
+}
+
+fn stop_distro(opts: StopOpts) -> Result<()> {
+    let distro = Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    if distro.is_none() {
+        bail!("No distro is currently running.");
+    }
+    let distro = distro.unwrap();
+    log::debug!("Executing a command in the distro.");
+    distro.stop(opts.sigkill)
 }

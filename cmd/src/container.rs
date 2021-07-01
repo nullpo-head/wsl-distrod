@@ -110,6 +110,17 @@ impl Container {
         Ok(waiter)
     }
 
+    pub fn stop(self, sigkill: bool) -> Result<()> {
+        let signal = if sigkill {
+            nix::sys::signal::SIGKILL
+        } else {
+            nix::sys::signal::SIGINT
+        };
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(self.init_pid.expect("[BUG] no init pid.") as i32), signal)
+            .with_context(|| "Failed to kill the init process of the container.")?;
+        Ok(())
+    }
+
 }
 
 fn daemonize() -> Result<()> {
