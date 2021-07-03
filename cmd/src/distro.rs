@@ -46,11 +46,10 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
-        let (mut waiter, _) = self.container
+        let _ = self.container
             .launch(None, "/mnt/distrod_root")
             .with_context(|| "Failed to launch a container.")?;
         self.export_run_info()?;
-        waiter.wait()?;
         Ok(())
     }
 

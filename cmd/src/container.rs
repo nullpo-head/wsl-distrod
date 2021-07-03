@@ -1,9 +1,11 @@
 use anyhow::{bail, Context, Result};
 use passfd::FdPassingExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -40,16 +42,16 @@ impl Container {
         Ok(Some(serde_json::from_str(json)?))
     }
 
-    pub fn launch<P: AsRef<Path>>(&mut self, init: Option<Vec<String>>, old_root: P) -> Result<(Waiter, ProcFile)> {
+    pub fn launch<P: AsRef<Path>>(&mut self, init: Option<Vec<String>>, old_root: P) -> Result<ProcFile> {
         let init = init.unwrap_or(vec!["/sbin/init".to_owned(), "--unit=multi-user.target".to_owned()]);
-        let init = vec!["/bin/bash"];
 
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
-        let waiter = {
+        {
             let mut command = CommandByMultiFork::new(&init[0]);
             command.args(&init[1..]);
-            command.pre_second_fork(|| {
-                daemonize().with_context(|| "The container failed to be daemonized.")?;
+            let fds_to_keep = vec![fd_channel_child.as_raw_fd()];
+            command.pre_second_fork(move || {
+                daemonize(&fds_to_keep).with_context(|| "The container failed to be daemonized.")?;
                 enter_new_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
                 Ok(())
             });
@@ -71,15 +73,13 @@ impl Container {
                     Ok(())
                 });
             }
-            let waiter = command.insert_waiter_proxy().with_context(|| "Failed to insert the waiter proxy")?;
             command.spawn().with_context(|| "Failed to spawn the init process.")?;
-            waiter
         };
 
         let procfile_fd = fd_channel_host.recv_fd().with_context(|| "Failed to do recv_fd.")?;
         let mut procfile = unsafe { ProcFile::from_raw_fd(procfile_fd) };
         self.init_pid = Some(procfile.pid().with_context(|| "Failed to get the pid of init.")?);
-        Ok((waiter, procfile))
+        Ok(procfile)
     }
 
     pub fn exec_command<I, S, T, P>(&self, program: S, args: I, wd: Option<P>) -> Result<Waiter>
@@ -123,7 +123,14 @@ impl Container {
 
 }
 
-fn daemonize() -> Result<()> {
+fn daemonize(fds_to_keep: &Vec<i32>) -> Result<()> {
+    nix::unistd::setsid().with_context(|| "Failed to setsid().")?;
+    for i in 1..=255 {
+        if fds_to_keep.contains(&i) {
+            continue;
+        }
+        let _ = nix::fcntl::fcntl(i, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC));
+    }
     Ok(())
 }
     
@@ -167,7 +174,7 @@ where P1: AsRef<Path>,
 
 fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &Vec<MountEntry>) -> Result<()> {
     let mut old_root = PathBuf::from(old_root.as_ref());
-    let binds = ["/init", "/proc/sys/fs/binfmt_misc", "/run", "/run/lock", "/run/shm", "/run/user", "/mnt/wsl", "/tmp"];
+    let binds = ["/init", "/proc/sys/fs/binfmt_misc", "/run", "/run/lock", "/run/shm", "/run/user", "/mnt/wsl", "/sys"];
     for bind in binds.iter() {
         let num_dirs = bind.matches('/').count();
         old_root.push(&bind[1..]);
