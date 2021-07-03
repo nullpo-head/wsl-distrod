@@ -10,8 +10,8 @@ use strum::{EnumString, EnumVariantNames};
 
 mod container;
 mod distro;
-mod procfile;
 mod multifork;
+mod procfile;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -137,7 +137,8 @@ fn launch_distro(opts: LaunchOpts) -> Result<()> {
 }
 
 fn exec_command(opts: ExecOpts) -> Result<()> {
-    let distro = Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    let distro =
+        Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         bail!("No distro is currently running.");
     }
@@ -148,7 +149,8 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {
-    let distro = Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    let distro =
+        Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         bail!("No distro is currently running.");
     }

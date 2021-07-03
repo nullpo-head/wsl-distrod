@@ -5,13 +5,13 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 
 pub struct ProcFile {
-    stat: File
+    stat: File,
 }
 
 impl ProcFile {
     pub fn current_proc() -> Result<ProcFile> {
-        let procfile = ProcFile::from_proc_dir("self")
-                                 .with_context(|| "Failed to open /proc/self/stat.")?;
+        let procfile =
+            ProcFile::from_proc_dir("self").with_context(|| "Failed to open /proc/self/stat.")?;
         Ok(procfile.ok_or_else(|| anyhow!("/proc/self/stat doesn't exist."))?)
     }
 
@@ -20,7 +20,9 @@ impl ProcFile {
     }
 
     pub unsafe fn from_raw_fd(pidfd: i32) -> ProcFile {
-        ProcFile { stat: File::from_raw_fd(pidfd) }
+        ProcFile {
+            stat: File::from_raw_fd(pidfd),
+        }
     }
 
     pub fn as_raw_fd(&self) -> i32 {
@@ -31,21 +33,28 @@ impl ProcFile {
         let mut stat_cont = String::new();
         self.stat.read_to_string(&mut stat_cont)?;
         self.stat.seek(SeekFrom::Start(0))?;
-        let pid = stat_cont.split(' ').nth(0)  // 0: PID 
-                           .ok_or_else(|| anyhow!("Failed to read pid from the stat file."))?
-                           .parse().with_context(|| "Failed to parse the pid.")?;
+        let pid = stat_cont
+            .split(' ')
+            .nth(0) // 0: PID
+            .ok_or_else(|| anyhow!("Failed to read pid from the stat file."))?
+            .parse()
+            .with_context(|| "Failed to parse the pid.")?;
         Ok(pid)
     }
 
     fn from_proc_dir(proc_dir: &str) -> Result<Option<ProcFile>> {
-        let pidfd = nix::fcntl::open(format!("/proc/{}/stat", proc_dir).as_str(), 
-                                     OFlag::O_RDONLY | OFlag::O_CLOEXEC,
-                                     nix::sys::stat::Mode::empty())
-                                .with_context(|| "Failed to open /proc/self/stat")?;
+        let pidfd = nix::fcntl::open(
+            format!("/proc/{}/stat", proc_dir).as_str(),
+            OFlag::O_RDONLY | OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        )
+        .with_context(|| "Failed to open /proc/self/stat")?;
         if pidfd < 0 {
             return Ok(None);
         }
-        Ok(Some(ProcFile { stat: unsafe { File::from_raw_fd(pidfd) } }))
+        Ok(Some(ProcFile {
+            stat: unsafe { File::from_raw_fd(pidfd) },
+        }))
     }
 }
 
