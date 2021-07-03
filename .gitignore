@@ -401,3 +401,9 @@ FodyWeavers.xsd
 # JetBrains Rider
 .idea/
 *.sln.iml
+
+
+## Distrod
+
+rootfs
+rootfs.tar.gz
