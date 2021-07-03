@@ -5,7 +5,6 @@ use std::io::{Read, Write};
 use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-
 use crate::container::Container;
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
@@ -27,7 +26,7 @@ impl Distro {
 
     pub fn get_running_distro() -> Result<Option<Distro>> {
         let run_info = get_distro_run_info_file(false, false)
-            .with_context(|| format!("Failed to open the distro run info file."))?;
+            .with_context(|| "Failed to open the distro run info file.")?;
         if run_info.is_none() {
             return Ok(None);
         }
@@ -36,7 +35,7 @@ impl Distro {
         run_info.read_to_string(&mut json)?;
 
         let container = Container::get_running_container_from_json(&json)
-            .with_context(|| format!("Failed to import running container info."))?;
+            .with_context(|| "Failed to import running container info.")?;
         if container.is_none() {
             return Ok(None);
         }
@@ -46,7 +45,8 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
-        let _ = self.container
+        let _ = self
+            .container
             .launch(None, "/mnt/distrod_root")
             .with_context(|| "Failed to launch a container.")?;
         self.export_run_info()?;
@@ -54,17 +54,21 @@ impl Distro {
     }
 
     pub fn exec_command<I, S, T, P>(&self, command: S, args: I, wd: Option<P>) -> Result<u32>
-    where 
+    where
         I: IntoIterator<Item = T>,
         S: AsRef<OsStr>,
         T: AsRef<OsStr>,
         P: AsRef<Path>,
     {
         log::debug!("Distro::exec_command.");
-        let mut waiter = self.container.exec_command(command, args, wd)
-                                       .with_context(|| "Failed to exec command in the container")?;
+        let mut waiter = self
+            .container
+            .exec_command(command, args, wd)
+            .with_context(|| "Failed to exec command in the container")?;
         log::debug!("Waiter waits.");
-        let exit_code = waiter.wait().with_context(|| "Failed to wait for the command.")?;
+        let exit_code = waiter
+            .wait()
+            .with_context(|| "Failed to wait for the command.")?;
         Ok(exit_code)
     }
 
@@ -101,10 +105,12 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
             return Ok(None);
         }
     }
-    let json = json.with_context(|| format!("Failed to open the run info file of the distro."))?;
+    let json = json.with_context(|| "Failed to open the run info file of the distro.")?;
     let metadata = json.metadata()?;
     if metadata.st_uid() != 0 || metadata.st_gid() != 0 {
-        bail!("The run info file of the distrod is unsafe, which is owned by a non-root user/group.");
+        bail!(
+            "The run info file of the distrod is unsafe, which is owned by a non-root user/group."
+        );
     }
     Ok(Some(json))
 }

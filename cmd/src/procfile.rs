@@ -35,7 +35,7 @@ impl ProcFile {
         self.stat.seek(SeekFrom::Start(0))?;
         let pid = stat_cont
             .split(' ')
-            .nth(0) // 0: PID
+            .next() // 0: PID
             .ok_or_else(|| anyhow!("Failed to read pid from the stat file."))?
             .parse()
             .with_context(|| "Failed to parse the pid.")?;

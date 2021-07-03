@@ -4,7 +4,6 @@ use nix::sched::CloneFlags;
 use nix::NixPath;
 use passfd::FdPassingExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -48,10 +47,12 @@ impl Container {
         init: Option<Vec<String>>,
         old_root: P,
     ) -> Result<ProcFile> {
-        let init = init.unwrap_or(vec![
-            "/sbin/init".to_owned(),
-            "--unit=multi-user.target".to_owned(),
-        ]);
+        let init = init.unwrap_or_else(|| {
+            vec![
+                "/sbin/init".to_owned(),
+                "--unit=multi-user.target".to_owned(),
+            ]
+        });
 
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
@@ -151,7 +152,7 @@ impl Container {
     }
 }
 
-fn daemonize(fds_to_keep: &Vec<i32>) -> Result<()> {
+fn daemonize(fds_to_keep: &[i32]) -> Result<()> {
     nix::unistd::setsid().with_context(|| "Failed to setsid().")?;
     for i in 1..=255 {
         if fds_to_keep.contains(&i) {
@@ -240,10 +241,7 @@ where
     Ok(())
 }
 
-fn mount_wsl_mountpoints<P: AsRef<Path>>(
-    old_root: P,
-    mount_entries: &Vec<MountEntry>,
-) -> Result<()> {
+fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntry]) -> Result<()> {
     let mut old_root = PathBuf::from(old_root.as_ref());
     let binds = [
         "/init",
