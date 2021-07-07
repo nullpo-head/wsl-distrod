@@ -207,6 +207,14 @@ where
     P2: AsRef<Path>,
 {
     let old_root_as_hostpath = new_root.as_ref().join(old_root.as_ref().strip_prefix("/")?);
+    if !old_root_as_hostpath.exists() {
+        fs::create_dir_all(&old_root_as_hostpath).with_context(|| {
+            format!(
+                "Failed to create a mount point for the old_root: {:?}.",
+                &old_root_as_hostpath,
+            )
+        })?;
+    }
     nix::mount::mount::<Path, Path, Path, Path>(
         Some(new_root.as_ref()),
         &new_root.as_ref(),
@@ -242,49 +250,68 @@ where
 }
 
 fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntry]) -> Result<()> {
-    let mut old_root = PathBuf::from(old_root.as_ref());
+    let mut bind_source = PathBuf::from(old_root.as_ref());
     let binds = [
-        "/init",
-        "/proc/sys/fs/binfmt_misc",
-        "/run",
-        "/run/lock",
-        "/run/shm",
-        "/run/user",
-        "/mnt/wsl",
-        "/sys",
+        ("/init", true),
+        ("/sys", false),
+        ("/run", false),
+        ("/run/shm", false),
+        ("/mnt/wsl", false),
+        ("/run/lock", false),
+        ("/run/user", false),
+        ("/proc/sys/fs/binfmt_misc", false),
     ];
-    for bind in binds.iter() {
-        let num_dirs = bind.matches('/').count();
-        old_root.push(&bind[1..]);
-        if !old_root.exists() {
-            log::debug!("WSL path {:?} does not exist", old_root.to_str());
+    for (bind_target, is_file) in binds.iter() {
+        let num_dirs = bind_target.matches('/').count();
+        bind_source.push(&bind_target[1..]);
+        if !bind_source.exists() {
+            log::warn!("WSL path {:?} does not exist.", bind_source.to_str());
             continue;
         }
+        let bind_target: &Path = bind_target.as_ref();
+        if !bind_target.exists() {
+            if *is_file {
+                File::create(bind_target).with_context(|| {
+                    format!(
+                        "Failed to create a mount point file for {:?} inside the container.",
+                        bind_target
+                    )
+                })?;
+            } else {
+                fs::create_dir_all(bind_target).with_context(|| {
+                    format!(
+                        "Failed to create a mount point directory for {:?} inside the container.",
+                        bind_target
+                    )
+                })?;
+            }
+        }
         nix::mount::mount::<Path, Path, Path, Path>(
-            Some(old_root.as_path()),
-            bind.as_ref(),
+            Some(bind_source.as_path()),
+            bind_target,
             None,
             nix::mount::MsFlags::MS_BIND,
             None,
         )
         .with_context(|| {
             format!(
-                "Failed to mount the WSL's special dir: {:?} -> {}",
-                old_root.as_path(),
-                bind
+                "Failed to mount the WSL's special dir: {:?} -> {:?}",
+                bind_source.as_path(),
+                bind_target
             )
         })?;
         for _ in 0..num_dirs {
-            old_root.pop();
+            bind_source.pop();
         }
     }
 
-    let mut init = old_root.clone();
+    // Mount 9p drives, that is, Windows drives.
+    let mut init = bind_source.clone();
     init.push("init");
     let root = PathBuf::from("/");
     for mount_entry in mount_entries {
         let path = &mount_entry.path;
-        if !path.starts_with(&old_root) {
+        if !path.starts_with(&bind_source) {
             continue;
         }
         if mount_entry.fstype.as_str() != "9p" {
@@ -295,7 +322,7 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
             continue;
         }
         let path_inside_container =
-            root.join(path.strip_prefix(&old_root).with_context(|| {
+            root.join(path.strip_prefix(&bind_source).with_context(|| {
                 format!("Unexpected error. strip_prefix failed for {:?}", &path)
             })?);
         if !path_inside_container.exists() {
