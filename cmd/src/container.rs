@@ -245,7 +245,15 @@ where
         nix::mount::MsFlags::empty(),
         None,
     )
-    .with_context(|| "mount /proc failed.")?;
+    .with_context(|| "mount /tmp failed.")?;
+    nix::mount::mount::<Path, Path, Path, Path>(
+        None,
+        "/run".as_ref(),
+        Some("tmpfs".as_ref()),
+        nix::mount::MsFlags::empty(),
+        None,
+    )
+    .with_context(|| "mount /run failed.")?;
     Ok(())
 }
 
@@ -253,12 +261,10 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
     let mut bind_source = PathBuf::from(old_root.as_ref());
     let binds = [
         ("/init", true),
-        ("/sys", false),
-        ("/run", false),
-        ("/run/shm", false),
         ("/mnt/wsl", false),
-        ("/run/lock", false),
-        ("/run/user", false),
+        ("/run/WSL", false),
+        ("/etc/wsl.conf", true),
+        ("/etc/resolv.conf", true),
         ("/proc/sys/fs/binfmt_misc", false),
     ];
     for (bind_target, is_file) in binds.iter() {
@@ -266,10 +272,41 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
         bind_source.push(&bind_target[1..]);
         if !bind_source.exists() {
             log::warn!("WSL path {:?} does not exist.", bind_source.to_str());
+            for _ in 0..num_dirs {
+                bind_source.pop();
+            }
             continue;
         }
         let bind_target: &Path = bind_target.as_ref();
+        let metadata = fs::symlink_metadata(bind_target)
+            .with_context(|| format!("Failed to retrieve the metadata of {:?}", bind_target));
+        let bind_target_exists = metadata.is_ok();
+        if bind_target_exists {
+            println!("eixst {:?}", bind_target);
+            let file_type = metadata?.file_type();
+            if file_type.is_symlink() {
+                if *is_file {
+                    fs::remove_file(bind_target).with_context(|| {
+                        format!(
+                            "Failed to remove the existing symlink before mounting. '{:?}'",
+                            bind_target
+                        )
+                    })?;
+                    println!("deleted a file symlink");
+                } else {
+                    fs::remove_dir(bind_target).with_context(|| {
+                        format!(
+                            "Failed to remove the existing symlink before mounting. '{:?}'",
+                            bind_target
+                        )
+                    })?;
+                    println!("deleted a dir symlink");
+                }
+            }
+        }
+        // this 'if' should not be 'else' because the `if` statement above could have deleted the bind_target
         if !bind_target.exists() {
+            println!("not eixst {:?}", bind_target);
             if *is_file {
                 File::create(bind_target).with_context(|| {
                     format!(
