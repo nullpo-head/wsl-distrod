@@ -230,37 +230,35 @@ where
             old_root_as_hostpath.as_path()
         )
     })?;
-    nix::mount::mount::<Path, Path, Path, Path>(
-        None,
-        "/proc".as_ref(),
-        Some("proc".as_ref()),
-        nix::mount::MsFlags::empty(),
-        None,
-    )
-    .with_context(|| "mount /proc failed.")?;
-    nix::mount::mount::<Path, Path, Path, Path>(
-        None,
-        "/tmp".as_ref(),
-        Some("tmpfs".as_ref()),
-        nix::mount::MsFlags::empty(),
-        None,
-    )
-    .with_context(|| "mount /tmp failed.")?;
-    nix::mount::mount::<Path, Path, Path, Path>(
-        None,
-        "/run".as_ref(),
-        Some("tmpfs".as_ref()),
-        nix::mount::MsFlags::empty(),
-        None,
-    )
-    .with_context(|| "mount /run failed.")?;
+    let minimum_mounts = [
+        ("/proc", "proc"),
+        ("/tmp", "tmpfs"),
+        ("/run", "tmpfs"),
+        ("/run/shm", "tmpfs"),
+    ];
+    for (path, fstype) in minimum_mounts.iter() {
+        mount_nosource_fs(path, fstype)?;
+    }
     Ok(())
+}
+
+fn mount_nosource_fs<P: AsRef<Path>>(path: P, fstype: &str) -> Result<()> {
+    create_mountpoint_unless_exist(path.as_ref(), false)?;
+    nix::mount::mount::<Path, Path, Path, Path>(
+        None,
+        path.as_ref(),
+        Some(fstype.as_ref()),
+        nix::mount::MsFlags::empty(),
+        None,
+    )
+    .with_context(|| format!("mount {:?} failed.", path.as_ref()))
 }
 
 fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntry]) -> Result<()> {
     let mut bind_source = PathBuf::from(old_root.as_ref());
     let binds = [
         ("/init", true),
+        ("/sys", false),
         ("/mnt/wsl", false),
         ("/run/WSL", false),
         ("/etc/wsl.conf", true),
@@ -278,51 +276,7 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
             continue;
         }
         let bind_target: &Path = bind_target.as_ref();
-        let metadata = fs::symlink_metadata(bind_target)
-            .with_context(|| format!("Failed to retrieve the metadata of {:?}", bind_target));
-        let bind_target_exists = metadata.is_ok();
-        if bind_target_exists {
-            println!("eixst {:?}", bind_target);
-            let file_type = metadata?.file_type();
-            if file_type.is_symlink() {
-                if *is_file {
-                    fs::remove_file(bind_target).with_context(|| {
-                        format!(
-                            "Failed to remove the existing symlink before mounting. '{:?}'",
-                            bind_target
-                        )
-                    })?;
-                    println!("deleted a file symlink");
-                } else {
-                    fs::remove_dir(bind_target).with_context(|| {
-                        format!(
-                            "Failed to remove the existing symlink before mounting. '{:?}'",
-                            bind_target
-                        )
-                    })?;
-                    println!("deleted a dir symlink");
-                }
-            }
-        }
-        // this 'if' should not be 'else' because the `if` statement above could have deleted the bind_target
-        if !bind_target.exists() {
-            println!("not eixst {:?}", bind_target);
-            if *is_file {
-                File::create(bind_target).with_context(|| {
-                    format!(
-                        "Failed to create a mount point file for {:?} inside the container.",
-                        bind_target
-                    )
-                })?;
-            } else {
-                fs::create_dir_all(bind_target).with_context(|| {
-                    format!(
-                        "Failed to create a mount point directory for {:?} inside the container.",
-                        bind_target
-                    )
-                })?;
-            }
-        }
+        create_mountpoint_unless_exist(bind_target, *is_file)?;
         nix::mount::mount::<Path, Path, Path, Path>(
             Some(bind_source.as_path()),
             bind_target,
@@ -384,6 +338,45 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
                 path_inside_container
             )
         })?;
+    }
+    Ok(())
+}
+
+fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Result<()> {
+    let path = path.as_ref();
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("Failed to retrieve the metadata of {:?}", path));
+    let bind_target_exists = metadata.is_ok();
+    if bind_target_exists {
+        let file_type = metadata?.file_type();
+        // Replace the symlink with an empty file only if this is a file mount.
+        if file_type.is_symlink() && is_file {
+            fs::remove_file(path).with_context(|| {
+                format!(
+                    "Failed to remove the existing symlink before mounting. '{:?}'",
+                    path
+                )
+            })?;
+        }
+    }
+    // this 'if' should not be 'else' because the `if` statement above could have deleted the path
+    if !path.exists() {
+        println!("not eixst {:?}", path);
+        if is_file {
+            File::create(path).with_context(|| {
+                format!(
+                    "Failed to create a mount point file for {:?} inside the container.",
+                    path
+                )
+            })?;
+        } else {
+            fs::create_dir_all(path).with_context(|| {
+                format!(
+                    "Failed to create a mount point directory for {:?} inside the container.",
+                    path
+                )
+            })?;
+        }
     }
     Ok(())
 }
