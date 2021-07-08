@@ -361,7 +361,6 @@ fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Res
     }
     // this 'if' should not be 'else' because the `if` statement above could have deleted the path
     if !path.exists() {
-        println!("not eixst {:?}", path);
         if is_file {
             File::create(path).with_context(|| {
                 format!(
