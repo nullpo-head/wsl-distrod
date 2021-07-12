@@ -54,6 +54,8 @@ impl Container {
             ]
         });
 
+        let needs_mnt_ns = self.root_fs.to_str() != Some("/");
+
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
             let mut command = CommandByMultiFork::new(&init[0]);
@@ -76,8 +78,23 @@ impl Container {
                             .send_fd(procfile.as_raw_fd())
                             .with_context(|| "Failed to do send_fd.")?;
                         drop(procfile);
-                        prepare_filesystem(&rootfs, &old_root)
-                            .with_context(|| "Failed to initialize the container's filesystem.")?;
+                        if needs_mnt_ns {
+                            prepare_filesystem(&rootfs, &old_root).with_context(|| {
+                                "Failed to initialize the container's filesystem."
+                            })?;
+                        } else {
+                            mount_nosource_fs("/tmp/proc", "proc")
+                                .with_context(|| "setup /tmp/proc fail.")?;
+                            nix::mount::mount::<Path, Path, Path, Path>(
+                                Some("/tmp/proc".as_ref()),
+                                "/proc".as_ref(),
+                                None,
+                                nix::mount::MsFlags::MS_BIND,
+                                None,
+                            )
+                            .with_context(|| "Failed to set up proc.")?;
+                            let _ = nix::mount::umount("/bin/bash");
+                        }
                         Ok(())
                     };
                     if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
@@ -223,6 +240,10 @@ where
         None,
     )
     .with_context(|| "Failed to bind mount the old_root")?;
+    if new_root.as_ref() == old_root.as_ref() {
+        std::env::set_current_dir(new_root.as_ref())
+            .with_context(|| "Failed to chdir to the new root.")?;
+    }
     nix::unistd::pivot_root(new_root.as_ref(), &old_root_as_hostpath).with_context(|| {
         format!(
             "pivot_root failed. new: {:#?}, old: {:#?}",

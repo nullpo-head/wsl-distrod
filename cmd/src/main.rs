@@ -1,16 +1,16 @@
-use anyhow::Result;
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use distro::Distro;
-use lxd_image::{DistroImageFetcher, DistroImageFile};
+use glob;
+use lxd_image::{DistroImage, DistroImageFetcher, DistroImageFile};
+use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::Path;
 use std::str::FromStr;
-use xz2::read::XzDecoder;
-
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
+use xz2::read::XzDecoder;
 
 use crate::lxd_image::{DefaultImageFetcher, DistroImageList};
 
@@ -25,6 +25,8 @@ mod procfile;
 pub struct Opts {
     #[structopt(short, long)]
     pub log_level: Option<LogLevel>,
+    #[structopt(short, long)]
+    pub call_from_wsl: bool,
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
@@ -54,7 +56,7 @@ pub struct LaunchOpts {
     root_fs: String,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Clone, Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct ExecOpts {
     command: String,
@@ -62,6 +64,9 @@ pub struct ExecOpts {
 
     #[structopt(short, long)]
     working_directory: Option<String>,
+
+    #[structopt(short, long)]
+    root: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -74,13 +79,41 @@ pub struct StopOpts {
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct InstallOpts {
-    distro: Option<String>,
-
-    #[structopt(short, long)]
+    #[structopt(short = "d", long)]
     install_dir: Option<String>,
+    #[structopt(short = "i", long)]
+    image_path: Option<String>,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "distrod")]
+pub struct BashAliasOpts {
+    #[structopt(short, long)]
+    pub c: Option<bool>,
+    pub command: Vec<String>,
 }
 
 fn main() {
+    if std::env::args()
+        .into_iter()
+        .next()
+        .map(|a0| a0.ends_with("bash"))
+        == Some(true)
+    {
+        let mut args: Vec<_> = std::env::args()
+            .into_iter()
+            .map(|a| CString::new(a).unwrap())
+            .collect();
+        args.insert(0, CString::new("/").unwrap());
+        args.insert(0, CString::new("-r").unwrap());
+        args.insert(0, CString::new("exec").unwrap());
+        args.insert(0, CString::new("/opt/distrod/distrod").unwrap());
+        println!("args: {:#?}", &args);
+        nix::unistd::execv(&CString::new("/opt/distrod/distrod").unwrap(), &args)
+            .with_context(|| "exec failed.")
+            .unwrap();
+    }
+
     let opts = Opts::from_args();
     init_logger(&opts.log_level);
 
@@ -124,6 +157,11 @@ fn run(opts: Opts) -> Result<()> {
     if !nix::unistd::getuid().is_root() {
         //bail!("Distrod needs the root permission.");
     }
+
+    if opts.call_from_wsl {
+        return follow_up_wsl_installation(opts);
+    }
+
     match opts.command {
         Subcommand::Install(install_opts) => {
             install_distro(install_opts)?;
@@ -141,18 +179,65 @@ fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
-fn install_distro(opts: InstallOpts) -> Result<()> {
-    let install_dir = opts
-        .install_dir
-        .unwrap_or_else(|| "/var/lib/distrod".to_owned());
-    if !Path::new(&install_dir).exists() {
-        std::fs::create_dir_all(&install_dir)
-            .with_context(|| format!("Failed to make a directory: {}.", &install_dir))?;
+fn follow_up_wsl_installation(_opts: Opts) -> Result<()> {
+    log::info!(
+        "glob: {:#?}",
+        glob::glob("/*")
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect::<Vec<_>>()
+    );
+    log::info!(
+        "glob: {:#?}",
+        glob::glob("/sbin/*")
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect::<Vec<_>>()
+    );
+    // In WSL installation process, the installer triggers "/opt/distrod/distrod -c install"
+    // and then the rootfs.tar.xz is sent via stdin.
+    let tar_xz_path = "/tmp/rootfs.tar.xz";
+    let mut tar_xz = File::create(&tar_xz_path)
+        .with_context(|| format!("Failed to create '{}' .", &tar_xz_path))?;
+    let mut writer = BufWriter::new(&mut tar_xz);
+    let mut reader = BufReader::new(std::io::stdin());
+    std::io::copy(&mut reader, &mut writer)
+        .with_context(|| "Failed to copy the rootfs from stdin to file.")?;
+
+    let dirs_to_remove = ["/bin", "/sbin"];
+    for dir in dirs_to_remove.iter() {
+        for entry in glob::glob(&format!("{}/*", &dir))
+            .with_context(|| format!("glob {}/** failed.", &dir))?
+        {
+            if let Ok(path) = entry {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("Failed to remove '{:?}' .", &path))?;
+            }
+        }
+        std::fs::remove_dir(&dir).with_context(|| format!("Failed to remove_dir '{}' .", &dir))?;
     }
-    let image = lxd_image::fetch_lxd_image(choose_from_list)
-        .with_context(|| "Failed to fetch the lxd image list.")?;
+
+    install_distro(InstallOpts {
+        image_path: Some(tar_xz_path.to_owned()),
+        install_dir: Some("/".to_owned()),
+    })
+}
+
+fn install_distro(opts: InstallOpts) -> Result<()> {
+    let image = match opts.image_path {
+        None => lxd_image::fetch_lxd_image(choose_from_list)
+            .with_context(|| "Failed to fetch the lxd image list.")?,
+        Some(path) => DistroImage {
+            image: DistroImageFile::Local(path),
+            name: "distrod".to_owned(),
+        },
+    };
+    let image_name = image.name;
     let tar_xz = match image.image {
-        DistroImageFile::Local(path) => Box::new(File::open(path)?) as Box<dyn Read>,
+        DistroImageFile::Local(path) => Box::new(
+            File::open(&path)
+                .with_context(|| format!("Failed to open the distro image file: {}.", &path))?,
+        ) as Box<dyn Read>,
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
             let response = reqwest::blocking::get(&url)
@@ -160,14 +245,22 @@ fn install_distro(opts: InstallOpts) -> Result<()> {
             Box::new(std::io::Cursor::new(response.bytes()?)) as Box<dyn Read>
         }
     };
+    let install_dir = opts
+        .install_dir
+        .unwrap_or_else(|| format!("/var/lib/distrod/{}", &image_name));
+    if !Path::new(&install_dir).exists() {
+        std::fs::create_dir_all(&install_dir)
+            .with_context(|| format!("Failed to make a directory: {}.", &install_dir))?;
+    }
     log::info!("Unpacking...");
-    let distro_install_dir = format!("{}/{}", install_dir, image.name);
     let tar = XzDecoder::new(tar_xz);
     let mut archive = tar::Archive::new(tar);
+    archive.set_preserve_permissions(true);
+    archive.set_unpack_xattrs(true);
     archive
-        .unpack(&distro_install_dir)
-        .with_context(|| format!("Failed to unpack the image to '{}'.", &distro_install_dir))?;
-    log::info!("Installation of {} is done!", image.name);
+        .unpack(&install_dir)
+        .with_context(|| format!("Failed to unpack the image to '{}'.", &install_dir))?;
+    log::info!("Extraction of {} is done!", &image_name);
     Ok(())
 }
 
@@ -231,9 +324,24 @@ fn launch_distro(opts: LaunchOpts) -> Result<()> {
 }
 
 fn exec_command(opts: ExecOpts) -> Result<()> {
-    let distro =
+    let mut distro =
         Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
+        if let Some(ref rootfs) = opts.root {
+            distro = Distro::get_installed_distro(&rootfs)
+                .with_context(|| "Failed to retrieve the installed distro.")?;
+            if distro.is_none() {
+                bail!(
+                    "Any distribution is not installed in '{:?}' for Distrod.",
+                    &rootfs
+                )
+            }
+            let mut distrol = distro.unwrap();
+            distrol
+                .launch()
+                .with_context(|| "Failed to launch the distro.")?;
+            return exec_command(opts.clone());
+        }
         bail!("No distro is currently running.");
     }
     let distro = distro.unwrap();
