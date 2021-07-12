@@ -94,26 +94,6 @@ pub struct BashAliasOpts {
 }
 
 fn main() {
-    if std::env::args()
-        .into_iter()
-        .next()
-        .map(|a0| a0.ends_with("bash"))
-        == Some(true)
-    {
-        let mut args: Vec<_> = std::env::args()
-            .into_iter()
-            .map(|a| CString::new(a).unwrap())
-            .collect();
-        args.insert(0, CString::new("/").unwrap());
-        args.insert(0, CString::new("-r").unwrap());
-        args.insert(0, CString::new("exec").unwrap());
-        args.insert(0, CString::new("/opt/distrod/distrod").unwrap());
-        println!("args: {:#?}", &args);
-        nix::unistd::execv(&CString::new("/opt/distrod/distrod").unwrap(), &args)
-            .with_context(|| "exec failed.")
-            .unwrap();
-    }
-
     let opts = Opts::from_args();
     init_logger(&opts.log_level);
 
@@ -155,11 +135,7 @@ fn init_logger(log_level: &Option<LogLevel>) {
 
 fn run(opts: Opts) -> Result<()> {
     if !nix::unistd::getuid().is_root() {
-        //bail!("Distrod needs the root permission.");
-    }
-
-    if opts.call_from_wsl {
-        return follow_up_wsl_installation(opts);
+        bail!("Distrod needs the root permission.");
     }
 
     match opts.command {
@@ -177,50 +153,6 @@ fn run(opts: Opts) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn follow_up_wsl_installation(_opts: Opts) -> Result<()> {
-    log::info!(
-        "glob: {:#?}",
-        glob::glob("/*")
-            .unwrap()
-            .map(|e| e.unwrap())
-            .collect::<Vec<_>>()
-    );
-    log::info!(
-        "glob: {:#?}",
-        glob::glob("/sbin/*")
-            .unwrap()
-            .map(|e| e.unwrap())
-            .collect::<Vec<_>>()
-    );
-    // In WSL installation process, the installer triggers "/opt/distrod/distrod -c install"
-    // and then the rootfs.tar.xz is sent via stdin.
-    let tar_xz_path = "/tmp/rootfs.tar.xz";
-    let mut tar_xz = File::create(&tar_xz_path)
-        .with_context(|| format!("Failed to create '{}' .", &tar_xz_path))?;
-    let mut writer = BufWriter::new(&mut tar_xz);
-    let mut reader = BufReader::new(std::io::stdin());
-    std::io::copy(&mut reader, &mut writer)
-        .with_context(|| "Failed to copy the rootfs from stdin to file.")?;
-
-    let dirs_to_remove = ["/bin", "/sbin"];
-    for dir in dirs_to_remove.iter() {
-        for entry in glob::glob(&format!("{}/*", &dir))
-            .with_context(|| format!("glob {}/** failed.", &dir))?
-        {
-            if let Ok(path) = entry {
-                std::fs::remove_file(&path)
-                    .with_context(|| format!("Failed to remove '{:?}' .", &path))?;
-            }
-        }
-        std::fs::remove_dir(&dir).with_context(|| format!("Failed to remove_dir '{}' .", &dir))?;
-    }
-
-    install_distro(InstallOpts {
-        image_path: Some(tar_xz_path.to_owned()),
-        install_dir: Some("/".to_owned()),
-    })
 }
 
 fn install_distro(opts: InstallOpts) -> Result<()> {
