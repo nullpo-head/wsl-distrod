@@ -77,12 +77,13 @@
   <PropertyGroup>
     <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
     <AppxBundle>Always</AppxBundle>
-    <PackageCertificateThumbprint>383A9E42E10B9DD3EAA270D7E6B6C4BA24DCED5F</PackageCertificateThumbprint>
+    <PackageCertificateThumbprint>675A5337F69CDA6EB8616E4FA4210493F94202B0</PackageCertificateThumbprint>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
     <AppxBundlePlatforms>x64|arm64</AppxBundlePlatforms>
     <AppInstallerUpdateFrequency>1</AppInstallerUpdateFrequency>
     <AppInstallerCheckForUpdateFrequency>OnApplicationRun</AppInstallerCheckForUpdateFrequency>
     <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
+    <PackageCertificateKeyFile>DistroLauncher-Appx_TemporaryKey.pfx</PackageCertificateKeyFile>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>
@@ -166,7 +167,8 @@
       <FileType>Document</FileType>
       <ExcludedFromBuild>false</ExcludedFromBuild>
       <Message>Copy $(SolutionDir)\$(platform)\$(Configuration)\launcher.exe into $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Message>
-      <Command>copy $(SolutionDir)\$(platform)\$(Configuration)\launcher.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command>
+      <Command>copy $(SolutionDir)\..\wintest\target\debug\wintest.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command>
+      <!-- <Command>copy $(SolutionDir)\$(platform)\$(Configuration)\launcher.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command> -->
       <Outputs>$(targetname).exe</Outputs>
     </CustomBuild>
   </ItemGroup>

@@ -4,6 +4,7 @@
 //
 
 #include "stdafx.h"
+#include <iostream>
 
 // Commandline arguments: 
 #define ARG_CONFIG              L"config"
@@ -75,7 +76,8 @@ HRESULT SetDefaultUser(std::wstring_view userName)
 int wmain(int argc, wchar_t const *argv[])
 {
     // Update the title bar of the console window.
-    SetConsoleTitleW(DistributionInfo::WindowTitle.c_str());
+    SetConsoleTitleW(L"test");
+    std::cout << "whoa! the launcher is running!" << std::endl;
 
     // Initialize a vector of arguments.
     std::vector<std::wstring_view> arguments;
@@ -116,6 +118,7 @@ int wmain(int argc, wchar_t const *argv[])
 
     // Parse the command line arguments.
     if ((SUCCEEDED(hr)) && (!installOnly)) {
+		std::cout << "Launching interactive! Yay!" << std::endl;
         if (arguments.empty()) {
             hr = g_wslApi.WslLaunchInteractive(L"", false, &exitCode);
 

@@ -157,6 +157,7 @@
     <CustomBuild Include="$(targetname)" />
     <CustomBuild Include="$(targetname)" />
     <CustomBuild Include="$(targetname)" />
+    <CustomBuild Include="$(targetname)" />
   </ItemGroup>
   <ItemGroup>
     <AppxManifest Include="distrod.appxmanifest" />
