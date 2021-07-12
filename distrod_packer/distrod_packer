@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+
+import argparse
+import tempfile
+import os
+import subprocess
+import shutil
+from typing import Iterator, Optional, Tuple, List
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='A script to generate the rootfs of distrod, which is bundled in the WSL distro distribution')
+    parser.add_argument(
+        'cmd_dir_path', help='The path to distrod\'s \'cmd\' directory.', type=str)
+    parser.add_argument(
+        'output_path', help='The pth of the output rootfs image.', type=str)
+    args = parser.parse_args()
+    pack_rootfs(args.cmd_dir_path, args.output_path)
+
+
+def pack_rootfs(cmd_dir_path: str, output_path: str):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        work_dir = temp_dir + "/root"
+        make_minimum_mountpoints(work_dir)
+        distrod_path = build_distrod(cmd_dir_path, work_dir)
+        copy_dependency_libs(work_dir)
+        ld_path = get_ld_dir_in_container(os.path.basename(
+            extract_dependency_libs(work_dir + distrod_path)[0]))
+        modify_lib_search_path(work_dir + distrod_path,
+                               ld_path, get_lib_dir_in_container())
+        put_misc_files(work_dir)
+        compress_rootfs(work_dir, output_path)
+
+
+def make_minimum_mountpoints(work_dir: str):
+    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc",
+            get_distrod_dir_in_container(),
+            get_distrod_dir_in_container("lib"),
+            get_distrod_dir_in_container("ld")]
+    for dir in dirs:
+        os.makedirs(work_dir + dir)
+
+
+def build_distrod(cmd_dir_path: str, work_dir: str) -> str:
+    dir_to_back = os.getcwd()
+    os.chdir(cmd_dir_path)
+    res = subprocess.run(["cargo", "build", "--release"])
+    if res.returncode != 0:
+        raise Exception("cargo build failed")
+    shutil.copy("./target/release/distrod",
+                work_dir + get_distrod_dir_in_container("distrod"))
+    os.chdir(dir_to_back)
+    return get_distrod_dir_in_container("distrod")
+
+
+def copy_dependency_libs(work_dir: str):
+    distrod_bin = work_dir + get_distrod_dir_in_container("distrod")
+    ld, libs = extract_dependency_libs(distrod_bin)
+    ld_path = work_dir + get_ld_dir_in_container(os.path.basename(ld))
+    shutil.copy(ld, ld_path)
+    for lib in libs:
+        shutil.copy(
+            lib, work_dir + get_lib_dir_in_container(os.path.basename(lib)))
+
+
+def extract_dependency_libs(bin: str) -> Tuple[str, List[str]]:
+    ldd = subprocess.run(["ldd", bin], capture_output=True)
+    if ldd.returncode != 0:
+        raise Exception(f"ldd failed.")
+    ldd_output = [l.strip() for l in ldd.stdout.decode("utf-8").splitlines()]
+    ld = next(filter(lambda line: "ld-linux-x86-64" in line, ldd_output))
+    ld = ld.split(" ")[0]
+
+    libs = []
+    for ldd_line in filter(lambda line: "=>" in line, ldd_output):
+        lib_path = ldd_line.split(" ")[2]
+        libs.append(lib_path)
+
+    return (ld, libs)
+
+
+def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
+    """Patch an ELF binary by patchelf"""
+    patch_args = ["patchelf", "--set-interpreter", ld_path, bin_path]
+    ret = subprocess.run(patch_args)
+    if ret.returncode != 0:
+        raise Exception(f"command failed. {patch_args}")
+    print(f"{rpath=}")
+    patch_args = ["patchelf", "--set-rpath", rpath, bin_path]
+    ret = subprocess.run(patch_args)
+    if ret.returncode != 0:
+        raise Exception(f"command failed. {patch_args}")
+
+
+def put_misc_files(work_dir: str):
+    with open(work_dir + "/etc/passwd", "w") as f:
+        f.write("root:x:0:0:root:/root:/opt/distrod/distrod\n")
+
+
+def compress_rootfs(work_dir: str, output_path: str):
+    dir_to_back = os.getcwd()
+    os.chdir(work_dir)
+    os.system(f"echo in $(pwd)")
+    os.system(f"sudo chmod 755 .")
+    os.system("sudo chown -R root:root .")
+    os.system("sudo tar czf distrod_root.tar.gz *")
+    os.system("sudo chmod -R 777 .")
+    os.chdir(dir_to_back)
+    shutil.copy(work_dir + "/distrod_root.tar.gz", output_path + "/")
+
+
+def get_lib_dir_in_container(inner_path: Optional[str] = None) -> str:
+    path = "lib"
+    if inner_path:
+        path = f"{path}/{inner_path}"
+    return get_distrod_dir_in_container(path)
+
+
+def get_ld_dir_in_container(inner_path: Optional[str] = None) -> str:
+    path = "ld"
+    if inner_path:
+        path = f"{path}/{inner_path}"
+    return get_distrod_dir_in_container(path)
+
+
+def get_distrod_dir_in_container(inner_path: Optional[str] = None) -> str:
+    path = "/opt/distrod"
+    if inner_path:
+        path = f"{path}/{inner_path}"
+    return path
+
+
+if __name__ == '__main__':
+    main()
