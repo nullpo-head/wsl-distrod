@@ -237,10 +237,14 @@ fn fetch_lxd_image() -> Result<Cursor<bytes::Bytes>> {
         DistroImageFile::Url(url) => url,
     };
     log::info!("Downloading '{}'...", url);
-    let response =
-        reqwest::blocking::get(&url).with_context(|| format!("Failed to download {}.", &url))?;
+    let mut client = reqwest::blocking::Client::builder().timeout(None).build()?;
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("Failed to download {}.", &url))?;
+    let bytes = response.bytes().with_context(|| "Download failed.")?;
     log::info!("Download done.");
-    Ok(Cursor::new(response.bytes()?))
+    Ok(Cursor::new(bytes))
 }
 
 fn append_tar_archive<W, R>(
