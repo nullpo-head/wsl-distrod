@@ -12,18 +12,18 @@ def main():
     parser = argparse.ArgumentParser(
         description='A script to generate the rootfs of distrod, which is bundled in the WSL distro distribution')
     parser.add_argument(
-        'cmd_dir_path', help='The path to distrod\'s \'cmd\' directory.', type=str)
+        'workspace_path', help='The path to distrod\'s workspace directory.', type=str)
     parser.add_argument(
-        'output_path', help='The pth of the output rootfs image.', type=str)
+        'output_path', help='The path of the output rootfs image.', type=str)
     args = parser.parse_args()
-    pack_rootfs(args.cmd_dir_path, args.output_path)
+    pack_rootfs(args.workspace_path, args.output_path)
 
 
-def pack_rootfs(cmd_dir_path: str, output_path: str):
+def pack_rootfs(workspace_path: str, output_path: str):
     with tempfile.TemporaryDirectory() as temp_dir:
         work_dir = temp_dir + "/root"
         make_minimum_mountpoints(work_dir)
-        distrod_path = build_distrod(cmd_dir_path, work_dir)
+        distrod_path = build_distrod(workspace_path, work_dir)
         copy_dependency_libs(work_dir)
         ld_path = get_ld_dir_in_container(os.path.basename(
             extract_dependency_libs(work_dir + distrod_path)[0]))
@@ -42,10 +42,10 @@ def make_minimum_mountpoints(work_dir: str):
         os.makedirs(work_dir + dir)
 
 
-def build_distrod(cmd_dir_path: str, work_dir: str) -> str:
+def build_distrod(workspace_path: str, work_dir: str) -> str:
     dir_to_back = os.getcwd()
-    os.chdir(cmd_dir_path)
-    res = subprocess.run(["cargo", "build", "--release"])
+    os.chdir(workspace_path)
+    res = subprocess.run(["cargo", "build", "--release", "-p", "distrod"])
     if res.returncode != 0:
         raise Exception("cargo build failed")
     shutil.copy("./target/release/distrod",
@@ -107,7 +107,7 @@ def compress_rootfs(work_dir: str, output_path: str):
     os.system("sudo tar czf distrod_root.tar.gz *")
     os.system("sudo chmod -R 777 .")
     os.chdir(dir_to_back)
-    shutil.copy(work_dir + "/distrod_root.tar.gz", output_path + "/")
+    shutil.copy(work_dir + "/distrod_root.tar.gz", output_path)
 
 
 def get_lib_dir_in_container(inner_path: Optional[str] = None) -> str:
