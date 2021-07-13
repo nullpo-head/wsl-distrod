@@ -1,28 +1,5 @@
-[package]
-name = "distrod"
-version = "0.1.0"
-authors = ["Takaya Saeki <abc.tkys+pub@gmail.com>"]
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-structopt = { version = "0.3" }
-log = "0.4"
-env_logger = "0.8"
-strum = { version = "0.20", features = ["derive"] }
-anyhow = "1.0"
-colored = "2"
-nix = "0.20.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-passfd = "0.1"
-scraper = "0.12"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-chrono = "0.4"
-xz2 = "0.1"
-tar = "0.4"
-glob = "0.3"
-
-[patch.crates-io]
-tar = { git = 'https://github.com/nullpo-head/tar-rs' }
+members = [
+    "distrod",
+]
