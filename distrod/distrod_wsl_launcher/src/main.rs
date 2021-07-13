@@ -110,7 +110,7 @@ fn init_logger(log_level: &Option<LogLevel>) {
 fn run(opts: Opts) -> Result<()> {
     match opts.command {
         None | Some(Subcommand::Install(_)) => {
-            install_distro_demo(opts)?;
+            install_distro(opts)?;
         }
         _ => {}
     }
@@ -121,92 +121,39 @@ fn install_distro(_opts: Opts) -> Result<()> {
     let wsl = WslApi::new()
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
     let tmp_dir = TempDir::new("distrod").with_context(|| "Failed to create a tempdir")?;
-    log::info!("tmp_dir: {:?}", tmp_dir.path());
-    //let rootfs =
-    //    download_lxd_image(tmp_dir.path()).with_context(|| "Failed to download an LXD image")?;
-    let rootfs = fs::copy(
-        r"C:\Users\abctk\Downloads\rootfs.tar.xz",
-        tmp_dir.path().join("rootfs.tar.xz"),
-    )
-    .with_context(|| "Failed to copy file.")?;
-    let rootfs_tarxz_path = tmp_dir.path().join("rootfs.tar.xz");
-    let rootfs_tarxz = File::open(&rootfs_tarxz_path)
-        .with_context(|| format!("Failed to open {:?}.", &rootfs_tarxz_path))?;
-    log::info!("download path: {:?}", tmp_dir.path().join("rootfs.tar.xz"));
-
-    let distrod_root = std::include_bytes!("../resources/distrod_root.tar.gz");
-    let distrod_root_targz_path = tmp_dir.path().join("install.tar.gz");
-    let mut distrod_root_targz = File::create(&distrod_root_targz_path)?;
-    distrod_root_targz.write_all(distrod_root)?;
-    drop(distrod_root_targz); // To avoid a warning about the file still being open.
-    log::info!("Unpacking the root fs. This may take time...");
-    wsl.register_distribution(DISTRO_NAME, &distrod_root_targz_path)
-        .with_context(|| "Failed to register the distribution.")?;
-    log::info!("done");
-
-    let pp = &tmp_dir
-        .path()
-        .join("rootfs.tar.xz")
-        .to_str()
-        .unwrap()
-        .to_owned();
-    let p = Path::new(pp);
-    log::info!("{:?} exists: {:?}", &p, p.exists());
-    let mut fout = File::create(tmp_dir.path().join("fout"))?;
-    let mut ferr = File::create(tmp_dir.path().join("ferr"))?;
-    let proc = wsl
-        .launch(DISTRO_NAME, "install", true, rootfs_tarxz, fout, ferr)
-        .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    log::info!("done2: exit: {:?}", proc.wait()?.code());
-    //log::info!("done2: exit: {:?}", proc);
-    let mut sout = String::new();
-    let mut serr = String::new();
-    File::read_to_string(&mut File::open(tmp_dir.path().join("fout"))?, &mut sout);
-    File::read_to_string(&mut File::open(tmp_dir.path().join("ferr"))?, &mut serr);
-    log::info!("fout: {}, ferr: {}", sout, serr);
-    Ok(())
-}
-
-fn install_distro2(_opts: Opts) -> Result<()> {
-    let wsl = WslApi::new()
-        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
-    let tmp_dir = TempDir::new("distrod").with_context(|| "Failed to create a tempdir")?;
 
     let lxd_root_tarxz = fetch_lxd_image().with_context(|| "Failed to download an LXD image")?;
-    log::info!("Unpacking the downloaded fs. This may take time...");
-    let mut lxd_tar = XzDecoder::new(lxd_root_tarxz);
+    let mut lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
     let distrod_targz = std::include_bytes!("../resources/distrod_root.tar.gz");
-    let mut distrod_tar = GzDecoder::new(std::io::Cursor::new(distrod_targz));
-    let mut rootfs_tar = vec![];
-    lxd_tar.read_to_end(&mut rootfs_tar)?;
-    distrod_tar.read_to_end(&mut rootfs_tar)?;
+    let mut distrod_tar = tar::Archive::new(GzDecoder::new(std::io::Cursor::new(distrod_targz)));
 
-    log::info!("Packing the new rootfs...");
     let install_targz_path = tmp_dir.path().join("install.tar.gz");
-    let mut install_targz = BufWriter::new(File::create(&install_targz_path)?);
+    let mut install_targz =
+        BufWriter::new(File::create(&install_targz_path).with_context(|| {
+            format!("Failed to create a new file at '{:?}'.", install_targz_path)
+        })?);
     let mut encoder = GzEncoder::new(install_targz, flate2::Compression::default());
-    encoder.write_all(&rootfs_tar);
-    drop(encoder); // To avoid a warning about the file still being open.
+
+    log::info!(
+        "Unpacking and mergeing the downloaded rootfs to the distrod rootfs. This may take time..."
+    );
+    let mut builder = tar::Builder::new(encoder);
+    append_tar_archive(&mut builder, &mut lxd_tar)
+        .with_context(|| "Failed to merge the downloaded LXD image.")?;
+    append_tar_archive(&mut builder, &mut distrod_tar)
+        .with_context(|| "Failed to merge the downloaded LXD image.")?;
 
     log::info!("Installing the rootfs...");
     wsl.register_distribution(DISTRO_NAME, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
-    log::info!("done");
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    let mut fout = File::create(tmp_dir.path().join("fout"))?;
-    let mut ferr = File::create(tmp_dir.path().join("ferr"))?;
-    let fin = "";
+    log::info!("Done!");
     let proc = wsl
-        .launch(DISTRO_NAME, "echo $0", true, fin, fout, ferr)
+        .launch_interactive(
+            DISTRO_NAME,
+            "/opt/distrod/distrod exec -r / /bin/bash",
+            true,
+        )
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
-    log::info!("done2: exit: {:?}", proc.wait()?.code());
-    //log::info!("done2: exit: {:?}", proc);
-    let mut sout = String::new();
-    let mut serr = String::new();
-    File::read_to_string(&mut File::open(tmp_dir.path().join("fout"))?, &mut sout);
-    File::read_to_string(&mut File::open(tmp_dir.path().join("ferr"))?, &mut serr);
-    log::info!("fout: {}, ferr: {}", sout, serr);
     Ok(())
 }
 
@@ -294,4 +241,32 @@ fn fetch_lxd_image() -> Result<Cursor<bytes::Bytes>> {
         reqwest::blocking::get(&url).with_context(|| format!("Failed to download {}.", &url))?;
     log::info!("Download done.");
     Ok(Cursor::new(response.bytes()?))
+}
+
+fn append_tar_archive<W, R>(
+    builder: &mut tar::Builder<W>,
+    archive: &mut tar::Archive<R>,
+) -> Result<()>
+where
+    W: std::io::Write,
+    R: std::io::Read,
+{
+    for entry in archive
+        .entries()
+        .with_context(|| "Failed to read the entries of the archive.")?
+    {
+        let mut entry = entry?;
+        let path = entry.path()?.as_os_str().to_owned();
+        let mut data = vec![];
+        {
+            entry
+                .read_to_end(&mut data)
+                .with_context(|| format!("Failed to read the data of an entry: {:?}.", &path));
+        }
+        let header = entry.header();
+        builder
+            .append(&header, Cursor::new(data))
+            .with_context(|| format!("Failed to add an entry to an archive. {:?}", path))?;
+    }
+    Ok(())
 }
