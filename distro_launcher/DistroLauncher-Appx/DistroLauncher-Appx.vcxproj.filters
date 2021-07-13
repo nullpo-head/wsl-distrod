@@ -150,9 +150,10 @@
     <None Include="DistroLauncher-Appx_TemporaryKey.pfx" />
     <None Include="Package.StoreAssociation.xml" />
     <None Include="DistroLauncher-Appx_StoreKey.pfx" />
-    <None Include="..\x64\install.tar.gz" />
+    <None Include="..\..\distrod\target\release\distrod_wsl_launcher.exe" />
   </ItemGroup>
   <ItemGroup>
+    <CustomBuild Include="$(targetname)" />
     <CustomBuild Include="$(targetname)" />
     <CustomBuild Include="$(targetname)" />
     <CustomBuild Include="$(targetname)" />

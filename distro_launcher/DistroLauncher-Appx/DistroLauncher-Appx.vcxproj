@@ -99,7 +99,7 @@
     <None Include="DistroLauncher-Appx_TemporaryKey.pfx" />
   </ItemGroup>
   <ItemGroup Condition="'$(Platform)'=='x64'">
-    <None Include="..\x64\install.tar.gz">
+    <None Include="..\..\distrod\target\release\distrod_wsl_launcher.exe">
       <DeploymentContent>true</DeploymentContent>
     </None>
   </ItemGroup>
@@ -166,9 +166,8 @@
     <CustomBuild Include="$(targetname)">
       <FileType>Document</FileType>
       <ExcludedFromBuild>false</ExcludedFromBuild>
-      <Message>Copy $(SolutionDir)\$(platform)\$(Configuration)\launcher.exe into $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Message>
-      <Command>copy $(SolutionDir)\..\wintest\target\debug\wintest.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command>
-      <!-- <Command>copy $(SolutionDir)\$(platform)\$(Configuration)\launcher.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command> -->
+      <Message>Copy $(SolutionDir)\..\distrod\target\release\distrod_wsl_launcher.exe into $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Message>
+      <Command>copy $(SolutionDir)\..\distrod\target\release\distrod_wsl_launcher.exe $(SolutionDir)\$(platform)\$(Configuration)\$(ProjectName)\$(targetname).exe</Command>
       <Outputs>$(targetname).exe</Outputs>
     </CustomBuild>
   </ItemGroup>
