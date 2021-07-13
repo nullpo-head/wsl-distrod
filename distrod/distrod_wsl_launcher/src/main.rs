@@ -135,13 +135,15 @@ fn install_distro(_opts: Opts) -> Result<()> {
     let mut encoder = GzEncoder::new(install_targz, flate2::Compression::default());
 
     log::info!(
-        "Unpacking and mergeing the downloaded rootfs to the distrod rootfs. This may take time..."
+        "Unpacking and merging the downloaded rootfs to the distrod rootfs. This may take time..."
     );
     let mut builder = tar::Builder::new(encoder);
     append_tar_archive(&mut builder, &mut lxd_tar)
         .with_context(|| "Failed to merge the downloaded LXD image.")?;
     append_tar_archive(&mut builder, &mut distrod_tar)
         .with_context(|| "Failed to merge the downloaded LXD image.")?;
+    builder.finish()?;
+    drop(builder); // So that we can close the install_targz file.
 
     log::info!("Installing the rootfs...");
     wsl.register_distribution(DISTRO_NAME, &install_targz_path)
