@@ -1,43 +1,14 @@
+use crate::distro_image::{
+    DefaultImageFetcher, DistroImage, DistroImageFetcher, DistroImageFile, DistroImageList,
+};
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDateTime;
 
-pub trait DistroImageFetcher {
-    fn get_name(&self) -> &str;
-    fn fetch(&self) -> Result<DistroImageList>;
-}
-
-pub enum DistroImageList {
-    Fetcher(
-        String,
-        Vec<Box<dyn DistroImageFetcher>>,
-        DefaultImageFetcher,
-    ),
-    Image(DistroImage),
-}
-
-#[derive(Debug)]
-pub enum DefaultImageFetcher {
-    Index(usize),
-    Name(String),
-}
-
-#[derive(Debug)]
-pub struct DistroImage {
-    pub name: String,
-    pub image: DistroImageFile,
-}
-
-#[derive(Debug)]
-pub enum DistroImageFile {
-    Local(String),
-    Url(String),
-}
-
 static LINUX_CONTAINERS_ORG_BASE: &str = "https://uk.images.linuxcontainers.org/";
 
-pub fn fetch_lxd_image(
-    choose_from_list: fn(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>>,
-) -> Result<DistroImage> {
+pub type ListChooseFn = fn(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>>;
+
+pub fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
     let mut distro_image_list = Box::new(LxdDistroImageList {}) as Box<dyn DistroImageFetcher>;
     loop {
         let fetched_image_list = distro_image_list.fetch()?;
@@ -52,7 +23,7 @@ pub fn fetch_lxd_image(
     }
 }
 
-struct LxdDistroImageList;
+pub struct LxdDistroImageList;
 
 impl DistroImageFetcher for LxdDistroImageList {
     fn get_name(&self) -> &str {
@@ -82,7 +53,7 @@ impl DistroImageFetcher for LxdDistroImageList {
 }
 
 #[derive(Debug)]
-struct LxdDistroVersionList {
+pub struct LxdDistroVersionList {
     name: String,
     version_list_url: String,
 }
@@ -119,7 +90,7 @@ impl DistroImageFetcher for LxdDistroVersionList {
 }
 
 #[derive(Debug)]
-struct LxdDistroVersion {
+pub struct LxdDistroVersion {
     distro_name: String,
     version_name: String,
     platform_list_url: String,

@@ -3,4 +3,5 @@
 members = [
     "distrod",
     "distrod_wsl_launcher",
+    "common",
 ]
