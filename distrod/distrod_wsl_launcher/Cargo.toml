@@ -22,7 +22,3 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 colored = "2"
 tempdir = "0.3"
 bytes = "1.0"
-
-
-[patch.crates-io]
-tar = { git = 'https://github.com/nullpo-head/tar-rs' }
