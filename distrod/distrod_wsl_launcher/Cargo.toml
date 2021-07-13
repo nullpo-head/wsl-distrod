@@ -1,5 +1,5 @@
 [package]
-name = "wintest"
+name = "distrod_wsl_launcher"
 version = "0.1.0"
 authors = ["Takaya Saeki <tasaeki@microsoft.com>"]
 edition = "2018"
