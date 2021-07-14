@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use anyhow::Result;
 
 pub trait DistroImageFetcher {
@@ -28,6 +30,6 @@ pub struct DistroImage {
 
 #[derive(Debug)]
 pub enum DistroImageFile {
-    Local(String),
+    Local(OsString),
     Url(String),
 }

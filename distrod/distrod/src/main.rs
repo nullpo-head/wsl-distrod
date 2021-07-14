@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use common::cli_ui::choose_from_list;
 use distro::Distro;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -42,29 +43,29 @@ pub enum LogLevel {
 
 #[derive(Debug, StructOpt)]
 pub enum Subcommand {
-    Install(InstallOpts),
-    Launch(LaunchOpts),
+    Create(CreateOpts),
+    Start(StartOpts),
     Exec(ExecOpts),
     Stop(StopOpts),
 }
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
-pub struct LaunchOpts {
-    root_fs: String,
+pub struct StartOpts {
+    root_fs: OsString,
 }
 
 #[derive(Clone, Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct ExecOpts {
-    command: String,
+    command: OsString,
     args: Vec<String>,
 
     #[structopt(short, long)]
-    working_directory: Option<String>,
+    working_directory: Option<OsString>,
 
     #[structopt(short, long)]
-    root: Option<String>,
+    root: Option<OsString>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -76,19 +77,11 @@ pub struct StopOpts {
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
-pub struct InstallOpts {
+pub struct CreateOpts {
     #[structopt(short = "d", long)]
-    install_dir: Option<String>,
+    install_dir: Option<OsString>,
     #[structopt(short = "i", long)]
-    image_path: Option<String>,
-}
-
-#[derive(Debug, StructOpt)]
-#[structopt(name = "distrod")]
-pub struct BashAliasOpts {
-    #[structopt(short, long)]
-    pub c: Option<bool>,
-    pub command: Vec<String>,
+    image_path: Option<OsString>,
 }
 
 fn main() {
@@ -162,7 +155,7 @@ fn run_as_command_alias() -> Result<()> {
     let target_path = Path::new("/").join(self_path.strip_prefix(ALIAS_DIR)?);
     let args = std::env::args().into_iter().collect();
     let exec_opts = ExecOpts {
-        command: target_path.to_str().unwrap().to_owned(),
+        command: target_path.into_os_string(),
         args,
         working_directory: None,
         root: None,
@@ -176,10 +169,10 @@ fn run(opts: Opts) -> Result<()> {
     }
 
     match opts.command {
-        Subcommand::Install(install_opts) => {
-            install_distro(install_opts)?;
+        Subcommand::Create(install_opts) => {
+            create_distro(install_opts)?;
         }
-        Subcommand::Launch(launch_opts) => {
+        Subcommand::Start(launch_opts) => {
             launch_distro(launch_opts)?;
         }
         Subcommand::Exec(exec_opts) => {
@@ -192,7 +185,7 @@ fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
-fn install_distro(opts: InstallOpts) -> Result<()> {
+fn create_distro(opts: CreateOpts) -> Result<()> {
     let image = match opts.image_path {
         None => lxd_image::fetch_lxd_image(choose_from_list)
             .with_context(|| "Failed to fetch the lxd image list.")?,
@@ -205,7 +198,7 @@ fn install_distro(opts: InstallOpts) -> Result<()> {
     let tar_xz = match image.image {
         DistroImageFile::Local(path) => Box::new(
             File::open(&path)
-                .with_context(|| format!("Failed to open the distro image file: {}.", &path))?,
+                .with_context(|| format!("Failed to open the distro image file: {:?}.", &path))?,
         ) as Box<dyn Read>,
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
@@ -216,10 +209,10 @@ fn install_distro(opts: InstallOpts) -> Result<()> {
     };
     let install_dir = opts
         .install_dir
-        .unwrap_or_else(|| format!("/var/lib/distrod/{}", &image_name));
+        .unwrap_or_else(|| format!("/var/lib/distrod/{}", &image_name).into());
     if !Path::new(&install_dir).exists() {
         std::fs::create_dir_all(&install_dir)
-            .with_context(|| format!("Failed to make a directory: {}.", &install_dir))?;
+            .with_context(|| format!("Failed to make a directory: {:?}.", &install_dir))?;
     }
     log::info!("Unpacking...");
     let tar = XzDecoder::new(tar_xz);
@@ -228,17 +221,17 @@ fn install_distro(opts: InstallOpts) -> Result<()> {
     archive.set_unpack_xattrs(true);
     archive
         .unpack(&install_dir)
-        .with_context(|| format!("Failed to unpack the image to '{}'.", &install_dir))?;
+        .with_context(|| format!("Failed to unpack the image to '{:?}'.", &install_dir))?;
     log::info!("Extraction of {} is done!", &image_name);
     Ok(())
 }
 
-fn launch_distro(opts: LaunchOpts) -> Result<()> {
+fn launch_distro(opts: StartOpts) -> Result<()> {
     let distro = Distro::get_installed_distro(&opts.root_fs)
         .with_context(|| "Failed to retrieve the installed distro.")?;
     if distro.is_none() {
         bail!(
-            "Any distribution is not installed in '{}' for Distrod.",
+            "Any distribution is not installed in '{:?}' for Distrod.",
             &opts.root_fs
         )
     }
