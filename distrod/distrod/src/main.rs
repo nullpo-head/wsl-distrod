@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use common::cli_ui::choose_from_list;
 use distro::Distro;
@@ -92,6 +92,14 @@ pub struct BashAliasOpts {
 }
 
 fn main() {
+    if is_executed_as_alias() {
+        init_logger(&Some(LogLevel::Info));
+        if let Err(err) = run_as_command_alias() {
+            log::error!("{:?}", err);
+        }
+        return;
+    }
+
     let opts = Opts::from_args();
     init_logger(&opts.log_level);
 
@@ -129,6 +137,37 @@ fn init_logger(log_level: &Option<LogLevel>) {
         )
     });
     env_logger_builder.init();
+}
+
+static ALIAS_DIR: &str = "/opt/distrod/alias";
+
+fn is_executed_as_alias() -> bool {
+    let inner = || -> Result<bool> {
+        let self_path =
+            std::env::current_exe().with_context(|| anyhow!("Failed to get the current_exe."))?;
+        if self_path.file_name() == Some(std::ffi::OsStr::new("distrod")) {
+            return Ok(false);
+        }
+        Ok(self_path.starts_with(ALIAS_DIR))
+    };
+    inner().unwrap_or(false)
+}
+
+fn run_as_command_alias() -> Result<()> {
+    if !is_executed_as_alias() {
+        bail!("Distrod is not run as an aliase");
+    }
+    let self_path =
+        std::env::current_exe().with_context(|| anyhow!("Failed to get the current_exe."))?;
+    let target_path = Path::new("/").join(self_path.strip_prefix(ALIAS_DIR)?);
+    let args = std::env::args().into_iter().collect();
+    let exec_opts = ExecOpts {
+        command: target_path.to_str().unwrap().to_owned(),
+        args,
+        working_directory: None,
+        root: None,
+    };
+    exec_command(exec_opts)
 }
 
 fn run(opts: Opts) -> Result<()> {
