@@ -6,8 +6,10 @@ use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::container::Container;
+use crate::mount_info::get_mount_entries;
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
+const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
 pub struct Distro {
     container: Container,
@@ -44,10 +46,21 @@ impl Distro {
         Ok(Some(Distro { container }))
     }
 
+    pub fn is_inside_running_distro() -> bool {
+        let mounts = get_mount_entries();
+        if mounts.is_err() {
+            return true;
+        }
+        let mounts = mounts.unwrap();
+        mounts
+            .iter()
+            .any(|entry| entry.path == Path::new(DISTRO_OLD_ROOT_PATH))
+    }
+
     pub fn launch(&mut self) -> Result<()> {
         let _ = self
             .container
-            .launch(None, "/mnt/distrod_root")
+            .launch(None, DISTRO_OLD_ROOT_PATH)
             .with_context(|| "Failed to launch a container.")?;
         self.export_run_info()?;
         Ok(())

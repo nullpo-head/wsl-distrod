@@ -2,9 +2,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use common::cli_ui::choose_from_list;
 use distro::Distro;
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::str::FromStr;
 use structopt::StructOpt;
@@ -14,10 +15,16 @@ use xz2::read::XzDecoder;
 use common::distro_image::{DistroImage, DistroImageFile};
 use common::lxd_image;
 
+use crate::command_alias::CommandAlias;
+
+mod command_alias;
 mod container;
 mod distro;
+mod mount_info;
 mod multifork;
+mod passwd;
 mod procfile;
+mod shell_hook;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -43,6 +50,8 @@ pub enum LogLevel {
 
 #[derive(Debug, StructOpt)]
 pub enum Subcommand {
+    Enable(EnableOpts),
+    Disable(DisableOpts),
     Create(CreateOpts),
     Start(StartOpts),
     Exec(ExecOpts),
@@ -83,6 +92,14 @@ pub struct CreateOpts {
     #[structopt(short = "i", long)]
     image_path: Option<OsString>,
 }
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab")]
+pub struct EnableOpts {}
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab")]
+pub struct DisableOpts {}
 
 fn main() {
     if is_executed_as_alias() {
@@ -132,8 +149,6 @@ fn init_logger(log_level: &Option<LogLevel>) {
     env_logger_builder.init();
 }
 
-static ALIAS_DIR: &str = "/opt/distrod/alias";
-
 fn is_executed_as_alias() -> bool {
     let inner = || -> Result<bool> {
         let self_path =
@@ -141,7 +156,7 @@ fn is_executed_as_alias() -> bool {
         if self_path.file_name() == Some(std::ffi::OsStr::new("distrod")) {
             return Ok(false);
         }
-        Ok(self_path.starts_with(ALIAS_DIR))
+        Ok(CommandAlias::is_alias(&self_path))
     };
     inner().unwrap_or(false)
 }
@@ -152,10 +167,28 @@ fn run_as_command_alias() -> Result<()> {
     }
     let self_path =
         std::env::current_exe().with_context(|| anyhow!("Failed to get the current_exe."))?;
-    let target_path = Path::new("/").join(self_path.strip_prefix(ALIAS_DIR)?);
-    let args = std::env::args().into_iter().collect();
+    let alias = CommandAlias::open_from_link(&self_path)?;
+    let args: Vec<_> = std::env::args().into_iter().collect();
+    if Distro::is_inside_running_distro() {
+        let path =
+            CString::new(alias.get_source_path().as_os_str().as_bytes()).with_context(|| {
+                format!(
+                    "Failed to construct a CString for the alias command.: '{:?}'",
+                    alias.get_source_path()
+                )
+            })?;
+        let cargs: Vec<CString> = args
+            .into_iter()
+            .map(|arg| {
+                CString::new(arg.as_bytes())
+                    .expect("CString must be able to be created non-null bytes.")
+            })
+            .collect();
+        nix::unistd::execv(&path, &cargs)?;
+        std::process::exit(1);
+    }
     let exec_opts = ExecOpts {
-        command: target_path.into_os_string(),
+        command: alias.get_source_path().as_os_str().to_owned(),
         args,
         working_directory: None,
         root: None,
@@ -169,6 +202,12 @@ fn run(opts: Opts) -> Result<()> {
     }
 
     match opts.command {
+        Subcommand::Enable(enable_opts) => {
+            enable_wsl_exec_hook(enable_opts)?;
+        }
+        Subcommand::Disable(disable_opts) => {
+            disable_wsl_exec_hook(disable_opts)?;
+        }
         Subcommand::Create(install_opts) => {
             create_distro(install_opts)?;
         }
@@ -183,6 +222,14 @@ fn run(opts: Opts) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn enable_wsl_exec_hook(_opts: EnableOpts) -> Result<()> {
+    shell_hook::enable_default_shell_hook()
+}
+
+fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
+    shell_hook::disable_default_shell_hook()
 }
 
 fn create_distro(opts: CreateOpts) -> Result<()> {

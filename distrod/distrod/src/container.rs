@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+use crate::mount_info::{get_mount_entries, MountEntry};
 use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::procfile::ProcFile;
 
@@ -417,27 +418,4 @@ fn umount_host_mountpoints<P: AsRef<Path>>(
         }
     }
     Ok(())
-}
-
-struct MountEntry {
-    path: PathBuf,
-    fstype: String,
-}
-
-fn get_mount_entries() -> Result<Vec<MountEntry>> {
-    let mounts = File::open("/proc/mounts").with_context(|| "Failed to open '/proc/mounts'")?;
-    let reader = BufReader::new(mounts);
-
-    let mut mount_entries = vec![];
-    for (_, line) in reader.lines().enumerate() {
-        let line = line?;
-        let row: Vec<&str> = line.split(' ').take(3).collect();
-        let (path, fstype) = (row[1].to_owned(), row[2].to_owned());
-        mount_entries.push(MountEntry {
-            path: PathBuf::from(path),
-            fstype,
-        });
-    }
-
-    Ok(mount_entries)
 }

@@ -94,8 +94,7 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
 
 
 def put_misc_files(work_dir: str):
-    with open(work_dir + "/etc/passwd", "w") as f:
-        f.write("root:x:0:0:root:/root:/opt/distrod/distrod\n")
+    pass
 
 
 def compress_rootfs(work_dir: str, output_path: str):

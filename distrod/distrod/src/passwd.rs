@@ -11,7 +11,7 @@ pub struct PasswdFile {
 }
 
 impl PasswdFile {
-    pub fn new() -> Result<PasswdFile> {
+    pub fn open() -> Result<PasswdFile> {
         let mut passwd_file =
             File::open("/etc/passwd").with_context(|| "Failed to open '/etc/passwd'.")?;
         let mut cont = String::new();
@@ -23,6 +23,7 @@ impl PasswdFile {
             path: PathBuf::from("/etc/passwd"),
         })
     }
+
     pub fn update(&mut self, updater: fn(passwd: PasswdView) -> Option<Passwd>) -> Result<()> {
         let mut new_cont = String::new();
         {
@@ -97,7 +98,7 @@ pub struct Passwd {
 }
 
 impl Passwd {
-    fn view(&self) -> PasswdView {
+    pub fn view(&self) -> PasswdView {
         PasswdView {
             name: &self.name,
             passwd: &self.passwd,
@@ -106,6 +107,18 @@ impl Passwd {
             gecos: &self.gecos,
             dir: &self.dir,
             shell: &self.shell,
+        }
+    }
+
+    pub fn from_view(view: PasswdView) -> Self {
+        Passwd {
+            name: view.name.to_owned(),
+            passwd: view.passwd.to_owned(),
+            uid: view.uid,
+            gid: view.gid,
+            gecos: view.gecos.to_owned(),
+            dir: view.dir.to_owned(),
+            shell: view.shell.to_owned(),
         }
     }
 }
@@ -229,7 +242,7 @@ mod tests {
         writeln!(&mut tmp, "root:x:0:0:root:/root:/bin/bash")?;
         writeln!(&mut tmp, "nullpo:x:1000:1000:,,,:/home/nullpo:/bin/bash")?;
         writeln!(&mut tmp, "foo:x:1000:1000:,,,::/sbin/nologin")?;
-        let mut passwd_file = PasswdFile::new()?;
+        let mut passwd_file = PasswdFile::open()?;
         passwd_file.change_path(tmp.path())?;
         let mut entries = passwd_file.entries();
         assert_eq!(ROOT, entries.next().unwrap()?);
@@ -248,7 +261,7 @@ mod tests {
         let mut orig_cont = String::new();
         tmp.read_to_string(&mut orig_cont)?;
 
-        let mut passwd_file = PasswdFile::new()?;
+        let mut passwd_file = PasswdFile::open()?;
         passwd_file.change_path(tmp.path())?;
         passwd_file.update(|_| None)?;
 
@@ -272,7 +285,7 @@ mod tests {
         writeln!(&mut tmp, "nullpo:x:1000:1000:,,,:/home/nullpo:/bin/bash")?;
         writeln!(&mut tmp, "foo:x:1000:1000:,,,::/sbin/nologin")?;
 
-        let mut passwd_file = PasswdFile::new()?;
+        let mut passwd_file = PasswdFile::open()?;
         passwd_file.change_path(tmp.path())?;
         passwd_file.update(|passwd| {
             let mut new_shell = PathBuf::from(passwd.shell);
