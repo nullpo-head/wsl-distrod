@@ -36,6 +36,7 @@ def pack_rootfs(workspace_path: str, output_path: str):
 def make_minimum_mountpoints(work_dir: str):
     dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc",
             get_distrod_dir_in_container(),
+            get_distrod_dir_in_container("alias"),
             get_distrod_dir_in_container("lib"),
             get_distrod_dir_in_container("ld")]
     for dir in dirs:

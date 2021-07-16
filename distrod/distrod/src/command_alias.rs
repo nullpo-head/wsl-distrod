@@ -26,9 +26,17 @@ impl CommandAlias {
                 )
             })?,
         );
-        if !source.as_ref().exists() {
+        if !link_path.exists() {
             if creates {
-                std::fs::hard_link(source.as_ref(), &link_path).with_context(|| {
+                let link_path_dir = link_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("Failed to get the parent of '{:?}'", &link_path))?;
+                if !link_path_dir.exists() {
+                    std::fs::create_dir_all(link_path_dir)?;
+                }
+                let distrod_path = std::env::current_exe()
+                    .with_context(|| anyhow!("Failed to get the current_exe."))?;
+                std::fs::hard_link(&distrod_path, &link_path).with_context(|| {
                     format!("Failed to create a new hard link at {:?}", &link_path)
                 })?;
             } else {
@@ -52,6 +60,7 @@ impl CommandAlias {
                 )
             })?
             .to_owned();
+        let source_path = Path::new("/").join(source_path);
         // Please note that we do not check if the source path exists, because
         // user may have deleted it.
         Ok(CommandAlias {
