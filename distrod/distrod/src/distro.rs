@@ -54,7 +54,7 @@ impl Distro {
         let mounts = mounts.unwrap();
         mounts
             .iter()
-            .any(|entry| entry.path == Path::new(DISTRO_OLD_ROOT_PATH))
+            .any(|entry| entry.path.starts_with(DISTRO_OLD_ROOT_PATH))
     }
 
     pub fn launch(&mut self) -> Result<()> {
