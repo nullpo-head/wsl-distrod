@@ -325,23 +325,14 @@ fn launch_distro(opts: StartOpts) -> Result<()> {
 }
 
 fn exec_command(opts: ExecOpts) -> Result<()> {
-    let mut distro =
+    let distro =
         Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
-        if let Some(ref rootfs) = opts.root {
-            distro = Distro::get_installed_distro(&rootfs)
-                .with_context(|| "Failed to retrieve the installed distro.")?;
-            if distro.is_none() {
-                bail!(
-                    "Any distribution is not installed in '{:?}' for Distrod.",
-                    &rootfs
-                )
-            }
-            let mut distrol = distro.unwrap();
-            distrol
-                .launch()
-                .with_context(|| "Failed to launch the distro.")?;
-            return exec_command(opts.clone());
+        if let Some(ref root_fs) = opts.root {
+            launch_distro(StartOpts {
+                root_fs: root_fs.clone(),
+            })?;
+            return exec_command(opts);
         }
         bail!("No distro is currently running.");
     }
