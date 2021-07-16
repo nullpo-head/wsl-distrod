@@ -24,19 +24,27 @@ impl PasswdFile {
         })
     }
 
-    pub fn update(&mut self, updater: fn(passwd: PasswdView) -> Option<Passwd>) -> Result<()> {
+    pub fn update(
+        &mut self,
+        updater: fn(passwd: PasswdView) -> Result<Option<Passwd>>,
+    ) -> Result<()> {
         let mut new_cont = String::new();
         {
             for line in self.file_cont.lines() {
-                match updater(PasswdView::deserialize(line)?) {
-                    Some(passwd) => {
+                let update = updater(PasswdView::deserialize(line)?);
+                match update {
+                    Ok(Some(passwd)) => {
                         let line = passwd.view().serialize();
                         new_cont += &line;
                         new_cont += "\n";
                     }
-                    None => {
+                    Ok(None) => {
                         new_cont += line;
                         new_cont += "\n";
+                    }
+                    _ => {
+                        update
+                            .with_context(|| format!("Failed to update the entry: '{}'.", line))?;
                     }
                 }
             }
