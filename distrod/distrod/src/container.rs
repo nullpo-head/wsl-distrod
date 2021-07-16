@@ -55,8 +55,6 @@ impl Container {
             ]
         });
 
-        let needs_mnt_ns = self.root_fs.to_str() != Some("/");
-
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
             let mut command = CommandByMultiFork::new(&init[0]);
@@ -79,23 +77,8 @@ impl Container {
                             .send_fd(procfile.as_raw_fd())
                             .with_context(|| "Failed to do send_fd.")?;
                         drop(procfile);
-                        if needs_mnt_ns {
-                            prepare_filesystem(&rootfs, &old_root).with_context(|| {
-                                "Failed to initialize the container's filesystem."
-                            })?;
-                        } else {
-                            mount_nosource_fs("/tmp/proc", "proc")
-                                .with_context(|| "setup /tmp/proc fail.")?;
-                            nix::mount::mount::<Path, Path, Path, Path>(
-                                Some("/tmp/proc".as_ref()),
-                                "/proc".as_ref(),
-                                None,
-                                nix::mount::MsFlags::MS_BIND,
-                                None,
-                            )
-                            .with_context(|| "Failed to set up proc.")?;
-                            let _ = nix::mount::umount("/bin/bash");
-                        }
+                        prepare_filesystem(&rootfs, &old_root)
+                            .with_context(|| "Failed to initialize the container's filesystem.")?;
                         Ok(())
                     };
                     if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
@@ -212,11 +195,31 @@ where
     P1: AsRef<Path>,
     P2: AsRef<Path>,
 {
-    prepare_minimum_root(new_root.as_ref(), old_root.as_ref())?;
-    let mount_entries = get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
-    mount_wsl_mountpoints(old_root.as_ref(), &mount_entries)?;
-    umount_host_mountpoints(old_root.as_ref(), &mount_entries)?;
+    if new_root.as_ref() == Path::new("/") {
+        prepare_host_base_root(old_root.as_ref())?;
+    } else {
+        prepare_minimum_root(new_root.as_ref(), old_root.as_ref())?;
+        let mount_entries =
+            get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
+        mount_wsl_mountpoints(old_root.as_ref(), &mount_entries)?;
+        umount_host_mountpoints(old_root.as_ref(), &mount_entries)?;
+    }
     Ok(())
+}
+
+fn prepare_host_base_root<P: AsRef<Path>>(old_root: P) -> Result<()> {
+    let saved_old_proc = old_root.as_ref().join("proc");
+    create_mountpoint_unless_exist(&saved_old_proc, false)?;
+    nix::mount::mount::<Path, Path, Path, Path>(
+        Some("/proc".as_ref()),
+        &saved_old_proc,
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+    )
+    .with_context(|| format!("Failed to mount the old proc on {:?}.", &saved_old_proc))?;
+    mount_nosource_fs("/proc", "proc")
+        .with_context(|| format!("setup {:?} fail.", old_root.as_ref().join("proc")))
 }
 
 fn prepare_minimum_root<P1, P2>(new_root: P1, old_root: P2) -> Result<()>
