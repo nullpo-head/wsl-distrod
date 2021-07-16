@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
-use common::cli_ui::choose_from_list;
+use common::cli_ui::{choose_from_list, prompt_path};
+use common::local_image::LocalDistroImage;
 use distro::Distro;
 use std::ffi::{CString, OsString};
 use std::fs::File;
@@ -12,8 +13,10 @@ use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
 use xz2::read::XzDecoder;
 
-use common::distro_image::{DistroImage, DistroImageFile};
-use common::lxd_image;
+use common::distro_image::{
+    self, DistroImage, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
+};
+use common::lxd_image::{self, LxdDistroImageList};
 
 use crate::command_alias::CommandAlias;
 
@@ -69,6 +72,9 @@ pub struct StartOpts {
 pub struct ExecOpts {
     command: OsString,
     args: Vec<String>,
+
+    #[structopt(short, long)]
+    arg0: Option<OsString>,
 
     #[structopt(short, long)]
     working_directory: Option<OsString>,
@@ -181,19 +187,31 @@ fn run_as_command_alias() -> Result<()> {
             .into_iter()
             .map(|arg| {
                 CString::new(arg.as_bytes())
-                    .expect("CString must be able to be created non-null bytes.")
+                    .expect("CString must be able to be created from non-null bytes.")
             })
             .collect();
         nix::unistd::execv(&path, &cargs)?;
         std::process::exit(1);
+    } else {
+        let mut exec_args = vec![
+            OsString::from("/opt/distrod/distrod"),
+            OsString::from("exec"),
+            OsString::from("-r"),
+            OsString::from("/"),
+            OsString::from("--"),
+            alias.get_source_path().as_os_str().to_owned(),
+        ];
+        exec_args.extend(args.iter().skip(1).map(OsString::from));
+        let cargs: Vec<CString> = exec_args
+            .into_iter()
+            .map(|arg| {
+                CString::new(arg.as_bytes())
+                    .expect("CString must be able to be created from non-null bytes.")
+            })
+            .collect();
+        nix::unistd::execv(&CString::new("/opt/distrod/distrod")?, &cargs)?;
+        std::process::exit(1);
     }
-    let exec_opts = ExecOpts {
-        command: alias.get_source_path().as_os_str().to_owned(),
-        args,
-        working_directory: None,
-        root: None,
-    };
-    exec_command(exec_opts)
 }
 
 fn run(opts: Opts) -> Result<()> {
@@ -226,21 +244,38 @@ fn run(opts: Opts) -> Result<()> {
 
 fn enable_wsl_exec_hook(_opts: EnableOpts) -> Result<()> {
     shell_hook::enable_default_shell_hook()
+        .with_context(|| "Failed to enable the hook to the default shell.")?;
+    log::info!("Distrod has been enabled. Now your shell will start under systemd.");
+    Ok(())
 }
 
 fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
     shell_hook::disable_default_shell_hook()
+        .with_context(|| "Failed to disable the hook to the default shell.")?;
+    log::info!("Distrod has been disabled. Now systemd won't start automatically.");
+    Ok(())
 }
 
 fn create_distro(opts: CreateOpts) -> Result<()> {
     let image = match opts.image_path {
-        None => lxd_image::fetch_lxd_image(choose_from_list)
-            .with_context(|| "Failed to fetch the lxd image list.")?,
+        None => {
+            let local_image_fetcher =
+                || Ok(Box::new(LocalDistroImage::new(prompt_path)) as Box<dyn DistroImageFetcher>);
+            let lxd_image_fetcher =
+                || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
+            let fetchers = vec![
+                Box::new(local_image_fetcher) as Box<DistroImageFetcherGen>,
+                Box::new(lxd_image_fetcher) as Box<DistroImageFetcherGen>,
+            ];
+            distro_image::fetch_image(fetchers, choose_from_list, 1)
+                .with_context(|| "Failed to fetch the image list.")?
+        }
         Some(path) => DistroImage {
             image: DistroImageFile::Local(path),
             name: "distrod".to_owned(),
         },
     };
+
     let image_name = image.name;
     let tar_xz = match image.image {
         DistroImageFile::Local(path) => Box::new(
@@ -269,7 +304,7 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
     archive
         .unpack(&install_dir)
         .with_context(|| format!("Failed to unpack the image to '{:?}'.", &install_dir))?;
-    log::info!("Extraction of {} is done!", &image_name);
+    log::info!("{} is created at {:?}", &image_name, install_dir);
     Ok(())
 }
 
@@ -311,7 +346,8 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     }
     let distro = distro.unwrap();
     log::debug!("Executing a command in the distro.");
-    let status = distro.exec_command(&opts.command, &opts.args, opts.working_directory)?;
+    let status =
+        distro.exec_command(&opts.command, &opts.args, opts.working_directory, opts.arg0)?;
     std::process::exit(status as i32)
 }
 

@@ -66,17 +66,24 @@ impl Distro {
         Ok(())
     }
 
-    pub fn exec_command<I, S, T, P>(&self, command: S, args: I, wd: Option<P>) -> Result<u32>
+    pub fn exec_command<I, S, T1, T2, P>(
+        &self,
+        command: S,
+        args: I,
+        wd: Option<P>,
+        arg0: Option<T2>,
+    ) -> Result<u32>
     where
-        I: IntoIterator<Item = T>,
+        I: IntoIterator<Item = T1>,
         S: AsRef<OsStr>,
-        T: AsRef<OsStr>,
+        T1: AsRef<OsStr>,
+        T2: AsRef<OsStr>,
         P: AsRef<Path>,
     {
         log::debug!("Distro::exec_command.");
         let mut waiter = self
             .container
-            .exec_command(command, args, wd)
+            .exec_command(command, args, wd, arg0)
             .with_context(|| "Failed to exec command in the container")?;
         log::debug!("Waiter waits.");
         let exit_code = waiter

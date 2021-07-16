@@ -1,12 +1,11 @@
 use crate::distro_image::{
     DefaultImageFetcher, DistroImage, DistroImageFetcher, DistroImageFile, DistroImageList,
+    ListChooseFn,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDateTime;
 
 static LINUX_CONTAINERS_ORG_BASE: &str = "https://uk.images.linuxcontainers.org/";
-
-pub type ListChooseFn = fn(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>>;
 
 pub fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
     let mut distro_image_list = Box::new(LxdDistroImageList {}) as Box<dyn DistroImageFetcher>;
@@ -23,11 +22,12 @@ pub fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
     }
 }
 
+#[derive(Default)]
 pub struct LxdDistroImageList;
 
 impl DistroImageFetcher for LxdDistroImageList {
     fn get_name(&self) -> &str {
-        "LXD image"
+        "Download a LXD image"
     }
 
     fn fetch(&self) -> Result<DistroImageList> {

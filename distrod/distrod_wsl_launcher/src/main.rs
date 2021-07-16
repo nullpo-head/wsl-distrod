@@ -1,14 +1,15 @@
 use anyhow::Result;
 use anyhow::{bail, Context};
 use colored::*;
-use common::cli_ui::choose_from_list;
-use common::distro_image::DistroImageFile;
-use common::lxd_image;
+use common::cli_ui::{self, choose_from_list};
+use common::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
+use common::local_image::LocalDistroImage;
+use common::lxd_image::{self, LxdDistroImageList};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Cursor, Read, Write};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
@@ -120,30 +121,22 @@ fn run(opts: Opts) -> Result<()> {
 fn install_distro(_opts: Opts) -> Result<()> {
     let wsl = WslApi::new()
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
-    let tmp_dir = TempDir::new("distrod").with_context(|| "Failed to create a tempdir")?;
 
-    let lxd_root_tarxz = fetch_lxd_image().with_context(|| "Failed to download an LXD image")?;
-    let mut lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
-    let distrod_targz = std::include_bytes!("../resources/distrod_root.tar.gz");
-    let mut distrod_tar = tar::Archive::new(GzDecoder::new(std::io::Cursor::new(distrod_targz)));
+    println!("===");
+    println!("Thanks for trying Distrod! Choose your distribution to install.");
+    println!("You can install your local .tar.xz, or download an image from the LXD* server.");
+    println!(" *LXD is a system container manager from Canonical. Distrod runs systemd, so you");
+    println!(" can try LXD if you like!");
+    println!("===");
 
-    let install_targz_path = tmp_dir.path().join("install.tar.gz");
-    let mut install_targz =
-        BufWriter::new(File::create(&install_targz_path).with_context(|| {
-            format!("Failed to create a new file at '{:?}'.", install_targz_path)
-        })?);
-    let mut encoder = GzEncoder::new(install_targz, flate2::Compression::default());
+    let lxd_root_tarxz = fetch_distro_image().with_context(|| "Failed to fetch a distro image.")?;
+    let lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
 
     log::info!(
-        "Unpacking and merging the downloaded rootfs to the distrod rootfs. This may take time..."
+        "Unpacking and merging the given rootfs to the distrod rootfs. This may take time..."
     );
-    let mut builder = tar::Builder::new(encoder);
-    append_tar_archive(&mut builder, &mut lxd_tar)
-        .with_context(|| "Failed to merge the downloaded LXD image.")?;
-    append_tar_archive(&mut builder, &mut distrod_tar)
-        .with_context(|| "Failed to merge the downloaded LXD image.")?;
-    builder.finish()?;
-    drop(builder); // So that we can close the install_targz file.
+    let tmp_dir = TempDir::new("distrod").with_context(|| "Failed to create a tempdir")?;
+    let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
     log::info!("Installing the rootfs...");
     wsl.register_distribution(DISTRO_NAME, &install_targz_path)
@@ -159,22 +152,56 @@ fn install_distro(_opts: Opts) -> Result<()> {
     Ok(())
 }
 
-fn fetch_lxd_image() -> Result<Cursor<bytes::Bytes>> {
-    let image = lxd_image::fetch_lxd_image(choose_from_list)
-        .with_context(|| "Failed to fetch the lxd image list.")?;
-    let url = match image.image {
-        DistroImageFile::Local(_) => bail!("fetch_lxd_image should not return a Local image."),
-        DistroImageFile::Url(url) => url,
-    };
-    log::info!("Downloading '{}'...", url);
-    let mut client = reqwest::blocking::Client::builder().timeout(None).build()?;
-    let response = client
-        .get(&url)
-        .send()
-        .with_context(|| format!("Failed to download {}.", &url))?;
-    let bytes = response.bytes().with_context(|| "Download failed.")?;
-    log::info!("Download done.");
-    Ok(Cursor::new(bytes))
+fn fetch_distro_image() -> Result<Box<dyn Read>> {
+    let local_image_fetcher =
+        || Ok(Box::new(LocalDistroImage::new(cli_ui::prompt_path)) as Box<dyn DistroImageFetcher>);
+    let lxd_image_fetcher =
+        || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
+    let fetchers = vec![
+        Box::new(local_image_fetcher) as Box<DistroImageFetcherGen>,
+        Box::new(lxd_image_fetcher) as Box<DistroImageFetcherGen>,
+    ];
+    let image = distro_image::fetch_image(fetchers, cli_ui::choose_from_list, 1)
+        .with_context(|| "Failed to fetch the image list.")?;
+    match image.image {
+        DistroImageFile::Local(path) => {
+            let file =
+                File::open(&path).with_context(|| format!("Failed to open '{:?}'.", &path))?;
+            Ok(Box::new(BufReader::new(file)) as Box<dyn Read>)
+        }
+        DistroImageFile::Url(url) => {
+            log::info!("Downloading '{}'...", url);
+            let mut client = reqwest::blocking::Client::builder().timeout(None).build()?;
+            let response = client
+                .get(&url)
+                .send()
+                .with_context(|| format!("Failed to download {}.", &url))?;
+            let bytes = response.bytes().with_context(|| "Download failed.")?;
+            log::info!("Download done.");
+            Ok(Box::new(Cursor::new(bytes)))
+        }
+    }
+}
+
+fn merge_tar_archive<R: Read>(work_dir: &TempDir, mut rootfs: tar::Archive<R>) -> Result<PathBuf> {
+    let distrod_targz = std::include_bytes!("../resources/distrod_root.tar.gz");
+    let mut distrod_tar = tar::Archive::new(GzDecoder::new(std::io::Cursor::new(distrod_targz)));
+
+    let install_targz_path = work_dir.path().join("install.tar.gz");
+    let mut install_targz =
+        BufWriter::new(File::create(&install_targz_path).with_context(|| {
+            format!("Failed to create a new file at '{:?}'.", install_targz_path)
+        })?);
+    let mut encoder = GzEncoder::new(install_targz, flate2::Compression::default());
+
+    let mut builder = tar::Builder::new(encoder);
+    append_tar_archive(&mut builder, &mut rootfs)
+        .with_context(|| "Failed to merge the downloaded LXD image.")?;
+    append_tar_archive(&mut builder, &mut distrod_tar)
+        .with_context(|| "Failed to merge the downloaded LXD image.")?;
+    builder.finish()?;
+    drop(builder); // So that we can close the install_targz file.
+    Ok(install_targz_path)
 }
 
 fn append_tar_archive<W, R>(

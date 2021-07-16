@@ -1,7 +1,7 @@
 use crate::distro_image::{DefaultImageFetcher, DistroImageFetcher, DistroImageList};
 use anyhow::{bail, Context, Result};
 use colored::*;
-use std::io::Write;
+use std::{ffi::OsString, io::Write};
 
 pub fn choose_from_list(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>> {
     match list {
@@ -45,4 +45,21 @@ pub fn choose_from_list(list: DistroImageList) -> Result<Box<dyn DistroImageFetc
         }
         DistroImageList::Image(_) => bail!("Image should not be passed to choose_from_list."),
     }
+}
+
+pub fn prompt_path(message: &str, default: Option<&str>) -> Result<OsString> {
+    log::info!("{}", message);
+    print!(
+        "[Input the path{}]: ",
+        default
+            .map(|s| format!(" (Default: '{}')", s))
+            .unwrap_or_else(|| "".to_owned())
+    );
+    let _ = std::io::stdout().flush();
+    let mut choice = String::new();
+    std::io::stdin()
+        .read_line(&mut choice)
+        .with_context(|| "failed to read from the stdin.")?;
+    choice = choice.trim_end().to_owned();
+    Ok(OsString::from(choice))
 }

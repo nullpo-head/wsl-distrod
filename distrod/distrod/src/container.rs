@@ -105,11 +105,18 @@ impl Container {
         Ok(procfile)
     }
 
-    pub fn exec_command<I, S, T, P>(&self, program: S, args: I, wd: Option<P>) -> Result<Waiter>
+    pub fn exec_command<I, S, T1, T2, P>(
+        &self,
+        program: S,
+        args: I,
+        wd: Option<P>,
+        arg0: Option<T2>,
+    ) -> Result<Waiter>
     where
-        I: IntoIterator<Item = T>,
+        I: IntoIterator<Item = T1>,
         S: AsRef<OsStr>,
-        T: AsRef<OsStr>,
+        T1: AsRef<OsStr>,
+        T2: AsRef<OsStr>,
         P: AsRef<Path>,
     {
         log::debug!("Container::exec_command.");
@@ -119,6 +126,9 @@ impl Container {
 
         let mut command = CommandByMultiFork::new(&program);
         command.args(args);
+        if let Some(arg0) = arg0 {
+            command.arg0(arg0);
+        }
         if let Some(wd) = wd {
             command.current_dir(wd);
         }
