@@ -194,10 +194,11 @@ fn run_as_command_alias() -> Result<()> {
         std::process::exit(1);
     } else {
         let mut exec_args = vec![
-            OsString::from("/opt/distrod/distrod"),
+            OsString::from("distrod"),
             OsString::from("exec"),
             OsString::from("-r"),
             OsString::from("/"),
+            OsString::from(format!("--arg0={}", &args[0])),
             OsString::from("--"),
             alias.get_source_path().as_os_str().to_owned(),
         ];
