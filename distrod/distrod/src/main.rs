@@ -19,6 +19,7 @@ use common::distro_image::{
 use common::lxd_image::LxdDistroImageList;
 
 use crate::command_alias::CommandAlias;
+use crate::passwd::drop_privilege;
 
 mod command_alias;
 mod container;
@@ -75,6 +76,9 @@ pub struct ExecOpts {
 
     #[structopt(short, long)]
     arg0: Option<OsString>,
+
+    #[structopt(short, long)]
+    user: Option<String>,
 
     #[structopt(short, long)]
     working_directory: Option<OsString>,
@@ -347,10 +351,45 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
         bail!("No distro is currently running.");
     }
     let distro = distro.unwrap();
+
+    let host_root_path = OsString::from("/");
+    let rootfs_path = opts.root.as_ref().unwrap_or(&host_root_path);
+    let ids = match opts.user.map(|user| get_ids_from_name(&user, rootfs_path)) {
+        Some(ids) => Some(ids?),
+        None => None,
+    };
+
     log::debug!("Executing a command in the distro.");
-    let status =
-        distro.exec_command(&opts.command, &opts.args, opts.working_directory, opts.arg0)?;
+    let mut waiter = distro.exec_command(
+        &opts.command,
+        &opts.args,
+        opts.working_directory,
+        opts.arg0,
+        ids,
+    )?;
+    if let Some((uid, gid)) = ids {
+        drop_privilege(uid, gid);
+    }
+    let status = waiter
+        .wait()
+        .with_context(|| "Failed to wait the executed command.")?;
     std::process::exit(status as i32)
+}
+
+fn get_ids_from_name<P: AsRef<Path>>(name: &str, rootfs_path: P) -> Result<(u32, u32)> {
+    let mut passwd_file = passwd::PasswdFile::open(&rootfs_path.as_ref().join("etc/passwd"))
+        .with_context(|| {
+            format!(
+                "Failed to open the passwd file. '{:?}'",
+                rootfs_path.as_ref()
+            )
+        })?;
+    let passwd = passwd_file.get_ent(name)?;
+    if passwd.is_none() {
+        bail!("The given user '{}' does not exist.", &name);
+    }
+    let passwd = passwd.unwrap();
+    Ok((passwd.uid, passwd.gid))
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {

@@ -1,5 +1,5 @@
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fs::File, io::Read};
 
 use anyhow::{anyhow, Context, Result};
@@ -11,17 +11,33 @@ pub struct PasswdFile {
 }
 
 impl PasswdFile {
-    pub fn open() -> Result<PasswdFile> {
-        let mut passwd_file =
-            File::open("/etc/passwd").with_context(|| "Failed to open '/etc/passwd'.")?;
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<PasswdFile> {
+        let mut passwd_file = File::open(path.as_ref())
+            .with_context(|| format!("Failed to open '{:?}'.", path.as_ref()))?;
         let mut cont = String::new();
         passwd_file
             .read_to_string(&mut cont)
-            .with_context(|| "Failed to read the contents of '/etc/passwd'.")?;
+            .with_context(|| format!("Failed to read the contents of '{:?}'.", path.as_ref()))?;
         Ok(PasswdFile {
             file_cont: cont,
-            path: PathBuf::from("/etc/passwd"),
+            path: PathBuf::from(path.as_ref()),
         })
+    }
+
+    pub fn get_ent(&mut self, user_name: &str) -> Result<Option<PasswdView>> {
+        for entry in self.entries() {
+            let entry = entry.with_context(|| "Failed to parse '/etc/passwd'.")?;
+            if entry.name == user_name {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn entries(&mut self) -> PasswdIterator {
+        PasswdIterator {
+            passwd_lines: self.file_cont.split('\n'),
+        }
     }
 
     pub fn update(
@@ -164,6 +180,23 @@ impl PasswdView<'_> {
     }
 }
 
+pub fn drop_privilege(uid: u32, gid: u32) {
+    let inner = || -> Result<()> {
+        let uid = nix::unistd::Uid::from_raw(uid);
+        let gid = nix::unistd::Gid::from_raw(gid);
+
+        nix::unistd::setgroups(&[gid])?;
+        nix::unistd::setresgid(gid, gid, gid)?;
+        nix::unistd::setresuid(uid, uid, uid)?;
+
+        Ok(())
+    };
+    if inner().is_err() {
+        log::error!("Failed to drop_privilege. Aborting.");
+        std::process::exit(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,12 +207,6 @@ mod tests {
     use tempfile::*;
 
     impl PasswdFile {
-        fn entries(&mut self) -> PasswdIterator {
-            PasswdIterator {
-                passwd_lines: self.file_cont.split('\n'),
-            }
-        }
-
         fn change_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
             let mut passwd_file = File::open(path.as_ref())
                 .with_context(|| format!("Failed to open '{:?}'.", path.as_ref()))?;
@@ -256,8 +283,7 @@ mod tests {
         writeln!(&mut tmp, "root:x:0:0:root:/root:/bin/bash")?;
         writeln!(&mut tmp, "nullpo:x:1000:1000:,,,:/home/nullpo:/bin/bash")?;
         writeln!(&mut tmp, "foo:x:1000:1000:,,,::/sbin/nologin")?;
-        let mut passwd_file = PasswdFile::open()?;
-        passwd_file.change_path(tmp.path())?;
+        let mut passwd_file = PasswdFile::open(tmp.path())?;
         let mut entries = passwd_file.entries();
         assert_eq!(ROOT, entries.next().unwrap()?);
         assert_eq!(NULLPO, entries.next().unwrap()?);
@@ -275,8 +301,7 @@ mod tests {
         let mut orig_cont = String::new();
         tmp.read_to_string(&mut orig_cont)?;
 
-        let mut passwd_file = PasswdFile::open()?;
-        passwd_file.change_path(tmp.path())?;
+        let mut passwd_file = PasswdFile::open(tmp.path())?;
         passwd_file.update(|_| Ok(None))?;
 
         let mut entries = passwd_file.entries();
@@ -299,8 +324,7 @@ mod tests {
         writeln!(&mut tmp, "nullpo:x:1000:1000:,,,:/home/nullpo:/bin/bash")?;
         writeln!(&mut tmp, "foo:x:1000:1000:,,,::/sbin/nologin")?;
 
-        let mut passwd_file = PasswdFile::open()?;
-        passwd_file.change_path(tmp.path())?;
+        let mut passwd_file = PasswdFile::open(tmp.path())?;
         passwd_file.update(|passwd| {
             let mut new_shell = PathBuf::from(passwd.shell);
             new_shell = new_shell.strip_prefix("/").unwrap().to_owned();

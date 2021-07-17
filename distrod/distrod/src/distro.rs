@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::container::Container;
 use crate::mount_info::get_mount_entries;
+pub use crate::multifork::Waiter;
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
@@ -72,7 +73,8 @@ impl Distro {
         args: I,
         wd: Option<P>,
         arg0: Option<T2>,
-    ) -> Result<u32>
+        ids: Option<(u32, u32)>,
+    ) -> Result<Waiter>
     where
         I: IntoIterator<Item = T1>,
         S: AsRef<OsStr>,
@@ -81,15 +83,9 @@ impl Distro {
         P: AsRef<Path>,
     {
         log::debug!("Distro::exec_command.");
-        let mut waiter = self
-            .container
-            .exec_command(command, args, wd, arg0)
-            .with_context(|| "Failed to exec command in the container")?;
-        log::debug!("Waiter waits.");
-        let exit_code = waiter
-            .wait()
-            .with_context(|| "Failed to wait for the command.")?;
-        Ok(exit_code)
+        self.container
+            .exec_command(command, args, wd, arg0, ids)
+            .with_context(|| "Failed to exec command in the container")
     }
 
     pub fn stop(self, sigkill: bool) -> Result<()> {
@@ -132,15 +128,21 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     }
 
     // echo hostname to /etc/hostname
+    let hostname_path = path.as_ref().join("etc/hostname");
     let mut hostname_buf = vec![0; 64];
     let hostname =
         nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
-    fs::write("/etc/hostname", hostname.to_str()?.as_bytes())
-        .with_context(|| format!("Failed to write hostname to '{:?}'.", "/etc/hostname"))?;
+    fs::write(&hostname_path, hostname.to_str()?.as_bytes())
+        .with_context(|| format!("Failed to write hostname to '{:?}'.", &hostname_path))?;
 
     // Remove /etc/resolv.conf
     if overwrites_potential_userfiles {
-        fs::remove_file("/etc/resolv.conf").with_context(|| "Failed remove /etc/resolv.conf.")?;
+        let resolv_conf_path = path.as_ref().join("etc/resolv.conf");
+        fs::remove_file(path.as_ref().join(&resolv_conf_path))
+            .with_context(|| format!("Failed to remove '{:?}'.", &resolv_conf_path))?;
+        // Touch /etc/resolv.conf so that WSL over-writes it or we can do bind-mount on it
+        File::create(&resolv_conf_path)
+            .with_context(|| format!("Failed to touch '{:?}'", &resolv_conf_path))?;
     }
     Ok(())
 }

@@ -4,7 +4,7 @@ use crate::command_alias::CommandAlias;
 use crate::passwd::{Passwd, PasswdFile};
 
 pub fn enable_default_shell_hook() -> Result<()> {
-    let mut passwd_file = PasswdFile::open()?;
+    let mut passwd_file = PasswdFile::open("/etc/passwd")?;
     passwd_file.update(|passwd| {
         if CommandAlias::is_alias(passwd.shell) {
             return Ok(None);
@@ -19,7 +19,7 @@ pub fn enable_default_shell_hook() -> Result<()> {
 }
 
 pub fn disable_default_shell_hook() -> Result<()> {
-    let mut passwd_file = PasswdFile::open()?;
+    let mut passwd_file = PasswdFile::open("/etc/passwd")?;
     passwd_file.update(|passwd| {
         if !CommandAlias::is_alias(passwd.shell) {
             return Ok(None);
