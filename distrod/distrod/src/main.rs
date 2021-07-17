@@ -16,7 +16,7 @@ use xz2::read::XzDecoder;
 use common::distro_image::{
     self, DistroImage, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
 };
-use common::lxd_image::{self, LxdDistroImageList};
+use common::lxd_image::LxdDistroImageList;
 
 use crate::command_alias::CommandAlias;
 

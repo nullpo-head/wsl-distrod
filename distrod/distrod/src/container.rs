@@ -6,7 +6,6 @@ use passfd::FdPassingExt;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -415,12 +414,14 @@ fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Res
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn umount_host_mountpoints<P: AsRef<Path>>(
     old_root: P,
-    mount_entries: &Vec<MountEntry>,
+    mount_entries: &[MountEntry],
 ) -> Result<()> {
     let mut mount_paths: Vec<&PathBuf> = mount_entries.iter().map(|e| &e.path).collect();
-    mount_paths.sort_by(|a, b| b.len().cmp(&a.len()));
+    #[allow(clippy::clippy::unnecessary_sort_by)]
+    mount_paths.sort_by(|a, b| b.len().cmp(&a.len())); // reverse sort
     for mount_path in mount_paths {
         if !mount_path.starts_with(&old_root) || mount_path.as_path() == old_root.as_ref() {
             continue;

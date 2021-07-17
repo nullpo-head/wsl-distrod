@@ -1,14 +1,9 @@
-use std::{
-    ffi::OsString,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::distro_image::{
-    DefaultImageFetcher, DistroImage, DistroImageFetcher, DistroImageFile, DistroImageList,
-    ListChooseFn, PromptPath,
+    DistroImage, DistroImageFetcher, DistroImageFile, DistroImageList, PromptPath,
 };
-use anyhow::{anyhow, Context, Result};
-use chrono::NaiveDateTime;
+use anyhow::Result;
 
 pub struct LocalDistroImage {
     prompt_path: PromptPath,

@@ -1,15 +1,15 @@
+use anyhow::Context;
 use anyhow::Result;
-use anyhow::{bail, Context};
 use colored::*;
-use common::cli_ui::{self, choose_from_list};
+use common::cli_ui::{self};
 use common::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
 use common::local_image::LocalDistroImage;
-use common::lxd_image::{self, LxdDistroImageList};
+use common::lxd_image::LxdDistroImageList;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write};
-use std::path::{Path, PathBuf};
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
+use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
@@ -142,12 +142,10 @@ fn install_distro(_opts: Opts) -> Result<()> {
     wsl.register_distribution(DISTRO_NAME, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
-    let proc = wsl
-        .launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable -d", true)
+    wsl.launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable -d", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     log::info!("Installation of Distrod has completed.");
-    let proc = wsl
-        .launch_interactive(DISTRO_NAME, "/bin/bash", true)
+    wsl.launch_interactive(DISTRO_NAME, "/bin/bash", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     Ok(())
 }
@@ -171,7 +169,7 @@ fn fetch_distro_image() -> Result<Box<dyn Read>> {
         }
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
-            let mut client = reqwest::blocking::Client::builder().timeout(None).build()?;
+            let client = reqwest::blocking::Client::builder().timeout(None).build()?;
             let response = client
                 .get(&url)
                 .send()
@@ -188,11 +186,11 @@ fn merge_tar_archive<R: Read>(work_dir: &TempDir, mut rootfs: tar::Archive<R>) -
     let mut distrod_tar = tar::Archive::new(GzDecoder::new(std::io::Cursor::new(distrod_targz)));
 
     let install_targz_path = work_dir.path().join("install.tar.gz");
-    let mut install_targz =
+    let install_targz =
         BufWriter::new(File::create(&install_targz_path).with_context(|| {
             format!("Failed to create a new file at '{:?}'.", install_targz_path)
         })?);
-    let mut encoder = GzEncoder::new(install_targz, flate2::Compression::default());
+    let encoder = GzEncoder::new(install_targz, flate2::Compression::default());
 
     let mut builder = tar::Builder::new(encoder);
     append_tar_archive(&mut builder, &mut rootfs)
@@ -222,7 +220,7 @@ where
         {
             entry
                 .read_to_end(&mut data)
-                .with_context(|| format!("Failed to read the data of an entry: {:?}.", &path));
+                .with_context(|| format!("Failed to read the data of an entry: {:?}.", &path))?;
         }
         let header = entry.header();
         builder

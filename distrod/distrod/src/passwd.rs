@@ -1,5 +1,5 @@
-use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use std::{fs::File, io::Read};
 
 use anyhow::{anyhow, Context, Result};
@@ -56,24 +56,6 @@ impl PasswdFile {
             .write_all(new_cont.as_bytes())
             .with_context(|| "Failed to write to the new /etc/passwd file.")?;
         self.file_cont = new_cont;
-        Ok(())
-    }
-
-    pub fn entries(&mut self) -> PasswdIterator {
-        PasswdIterator {
-            passwd_lines: self.file_cont.split('\n'),
-        }
-    }
-
-    fn change_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let mut passwd_file = File::open(path.as_ref())
-            .with_context(|| format!("Failed to open '{:?}'.", path.as_ref()))?;
-        let mut cont = String::new();
-        passwd_file
-            .read_to_string(&mut cont)
-            .with_context(|| format!("Failed to read the contents of '{:?}'.", path.as_ref()))?;
-        self.file_cont = cont;
-        self.path = path.as_ref().to_owned();
         Ok(())
     }
 }
@@ -185,7 +167,31 @@ impl PasswdView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Seek, SeekFrom},
+        path::Path,
+    };
     use tempfile::*;
+
+    impl PasswdFile {
+        fn entries(&mut self) -> PasswdIterator {
+            PasswdIterator {
+                passwd_lines: self.file_cont.split('\n'),
+            }
+        }
+
+        fn change_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+            let mut passwd_file = File::open(path.as_ref())
+                .with_context(|| format!("Failed to open '{:?}'.", path.as_ref()))?;
+            let mut cont = String::new();
+            passwd_file.read_to_string(&mut cont).with_context(|| {
+                format!("Failed to read the contents of '{:?}'.", path.as_ref())
+            })?;
+            self.file_cont = cont;
+            self.path = path.as_ref().to_owned();
+            Ok(())
+        }
+    }
 
     static ROOT: PasswdView = PasswdView {
         name: "root",
@@ -271,7 +277,7 @@ mod tests {
 
         let mut passwd_file = PasswdFile::open()?;
         passwd_file.change_path(tmp.path())?;
-        passwd_file.update(|_| None)?;
+        passwd_file.update(|_| Ok(None))?;
 
         let mut entries = passwd_file.entries();
         assert_eq!(ROOT, entries.next().unwrap()?);
@@ -299,7 +305,7 @@ mod tests {
             let mut new_shell = PathBuf::from(passwd.shell);
             new_shell = new_shell.strip_prefix("/").unwrap().to_owned();
             new_shell = Path::new("/opt/distrod/alias/").join(new_shell);
-            Some(Passwd {
+            Ok(Some(Passwd {
                 name: passwd.name.to_owned(),
                 passwd: passwd.passwd.to_owned(),
                 uid: passwd.uid,
@@ -307,7 +313,7 @@ mod tests {
                 gecos: passwd.gecos.to_owned(),
                 dir: passwd.dir.to_owned(),
                 shell: new_shell.to_str().map(|s| s.to_owned()).unwrap(),
-            })
+            }))
         })?;
 
         let expected = "root:x:0:0:root:/root:/opt/distrod/alias/bin/bash\n\

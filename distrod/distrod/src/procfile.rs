@@ -15,6 +15,7 @@ impl ProcFile {
         Ok(procfile.ok_or_else(|| anyhow!("/proc/self/stat doesn't exist."))?)
     }
 
+    #[allow(dead_code)]
     pub fn from_pid(pid: u32) -> Result<Option<ProcFile>> {
         ProcFile::from_proc_dir(pid.to_string().as_str())
     }
