@@ -65,7 +65,8 @@ pub enum Subcommand {
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct StartOpts {
-    root_fs: OsString,
+    #[structopt(short, long)]
+    rootfs: Option<OsString>,
 }
 
 #[derive(Clone, Debug, StructOpt)]
@@ -84,7 +85,7 @@ pub struct ExecOpts {
     working_directory: Option<OsString>,
 
     #[structopt(short, long)]
-    root: Option<OsString>,
+    rootfs: Option<OsString>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -324,12 +325,13 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
 }
 
 fn launch_distro(opts: StartOpts) -> Result<()> {
-    let distro = Distro::get_installed_distro(&opts.root_fs)
-        .with_context(|| "Failed to retrieve the installed distro.")?;
+    let distro =
+        Distro::get_installed_distro(&opts.rootfs.as_ref().unwrap_or(&OsString::from("/")))
+            .with_context(|| "Failed to retrieve the installed distro.")?;
     if distro.is_none() {
         bail!(
             "Any distribution is not installed in '{:?}' for Distrod.",
-            &opts.root_fs
+            &opts.rootfs
         )
     }
     let mut distro = distro.unwrap();
@@ -342,9 +344,9 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     let distro =
         Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
-        if let Some(ref root_fs) = opts.root {
+        if let Some(ref rootfs) = opts.rootfs {
             launch_distro(StartOpts {
-                root_fs: root_fs.clone(),
+                rootfs: Some(rootfs.clone()),
             })?;
             return exec_command(opts);
         }
@@ -353,7 +355,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     let distro = distro.unwrap();
 
     let host_root_path = OsString::from("/");
-    let rootfs_path = opts.root.as_ref().unwrap_or(&host_root_path);
+    let rootfs_path = opts.rootfs.as_ref().unwrap_or(&host_root_path);
     let ids = match opts.user.map(|user| get_ids_from_name(&user, rootfs_path)) {
         Some(ids) => Some(ids?),
         None => None,
