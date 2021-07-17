@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -108,6 +108,41 @@ impl Distro {
             .with_context(|| "Failed to write to a distro run info file.")?;
         Ok(())
     }
+}
+
+pub fn initialize_distro_rootfs<P: AsRef<Path>>(
+    path: P,
+    overwrites_potential_userfiles: bool,
+) -> Result<()> {
+    let metadata = fs::metadata(path.as_ref())?;
+    if !metadata.is_dir() {
+        bail!("The given path is not a directory: '{:?}'", path.as_ref());
+    }
+
+    // Remove systemd network configurations
+    for path in glob::glob(
+        path.as_ref()
+            .join("etc/systemd/network/*.network")
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| anyhow!("Failed to convert systemd network file paths."))?,
+    )? {
+        let path = path?;
+        fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
+    }
+
+    // echo hostname to /etc/hostname
+    let mut hostname_buf = vec![0; 64];
+    let hostname =
+        nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
+    fs::write("/etc/hostname", hostname.to_str()?.as_bytes())
+        .with_context(|| format!("Failed to write hostname to '{:?}'.", "/etc/hostname"))?;
+
+    // Remove /etc/resolv.conf
+    if overwrites_potential_userfiles {
+        fs::remove_file("/etc/resolv.conf").with_context(|| "Failed remove /etc/resolv.conf.")?;
+    }
+    Ok(())
 }
 
 fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {

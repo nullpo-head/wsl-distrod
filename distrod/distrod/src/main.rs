@@ -101,7 +101,10 @@ pub struct CreateOpts {
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
-pub struct EnableOpts {}
+pub struct EnableOpts {
+    #[structopt(short, long)]
+    do_full_initialization: bool,
+}
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
@@ -243,9 +246,11 @@ fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
-fn enable_wsl_exec_hook(_opts: EnableOpts) -> Result<()> {
+fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
     shell_hook::enable_default_shell_hook()
         .with_context(|| "Failed to enable the hook to the default shell.")?;
+    distro::initialize_distro_rootfs("/", opts.do_full_initialization)
+        .with_context(|| "Failed to initialize the rootfs.")?;
     log::info!("Distrod has been enabled. Now your shell will start under systemd.");
     Ok(())
 }
@@ -290,6 +295,8 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
             Box::new(std::io::Cursor::new(response.bytes()?)) as Box<dyn Read>
         }
     };
+
+    log::info!("Unpacking...");
     let install_dir = opts
         .install_dir
         .unwrap_or_else(|| format!("/var/lib/distrod/{}", &image_name).into());
@@ -297,7 +304,6 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
         std::fs::create_dir_all(&install_dir)
             .with_context(|| format!("Failed to make a directory: {:?}.", &install_dir))?;
     }
-    log::info!("Unpacking...");
     let tar = XzDecoder::new(tar_xz);
     let mut archive = tar::Archive::new(tar);
     archive.set_preserve_permissions(true);
@@ -305,6 +311,10 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
     archive
         .unpack(&install_dir)
         .with_context(|| format!("Failed to unpack the image to '{:?}'.", &install_dir))?;
+
+    distro::initialize_distro_rootfs(&install_dir, true)
+        .with_context(|| "Failed to initialize the rootfs.")?;
+
     log::info!("{} is created at {:?}", &image_name, install_dir);
     Ok(())
 }

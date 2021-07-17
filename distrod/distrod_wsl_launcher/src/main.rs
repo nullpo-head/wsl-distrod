@@ -143,7 +143,7 @@ fn install_distro(_opts: Opts) -> Result<()> {
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
     let proc = wsl
-        .launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable", true)
+        .launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable -d", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     log::info!("Installation of Distrod has completed.");
     let proc = wsl
