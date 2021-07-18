@@ -2,6 +2,7 @@
 
 members = [
     "distrod",
+    "distrod-exec",
     "distrod_wsl_launcher",
-    "common",
+    "libs",
 ]

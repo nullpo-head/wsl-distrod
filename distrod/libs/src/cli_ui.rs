@@ -63,3 +63,21 @@ pub fn prompt_path(message: &str, default: Option<&str>) -> Result<OsString> {
     choice = choice.trim_end().to_owned();
     Ok(OsString::from(choice))
 }
+
+pub fn prompt_string(message: &str, target_name: &str, default: Option<&str>) -> Result<String> {
+    log::info!("{}", message);
+    print!(
+        "[Input {}{}]: ",
+        target_name,
+        default
+            .map(|s| format!(" (Default: '{}')", s))
+            .unwrap_or_else(|| "".to_owned())
+    );
+    let _ = std::io::stdout().flush();
+    let mut choice = String::new();
+    std::io::stdin()
+        .read_line(&mut choice)
+        .with_context(|| "failed to read from the stdin.")?;
+    choice = choice.trim_end().to_owned();
+    Ok(choice)
+}

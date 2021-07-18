@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use crate::command_alias::CommandAlias;
 use crate::passwd::{Passwd, PasswdFile};
+use libs::command_alias::CommandAlias;
 
 pub fn enable_default_shell_hook() -> Result<()> {
     let mut passwd_file = PasswdFile::open("/etc/passwd")?;

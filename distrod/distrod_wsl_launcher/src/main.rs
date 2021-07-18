@@ -1,19 +1,21 @@
 use anyhow::Context;
 use anyhow::Result;
 use colored::*;
-use common::cli_ui::{self};
-use common::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
-use common::local_image::LocalDistroImage;
-use common::lxd_image::LxdDistroImageList;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use libs::cli_ui::prompt_string;
+use libs::cli_ui::{self};
+use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
+use libs::local_image::LocalDistroImage;
+use libs::lxd_image::LxdDistroImageList;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
-use tempdir::TempDir;
+use tempfile::tempdir;
+use tempfile::TempDir;
 use wslapi::Library as WslApi;
 use xz2::read::XzDecoder;
 
@@ -122,30 +124,54 @@ fn install_distro(_opts: Opts) -> Result<()> {
     let wsl = WslApi::new()
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
 
-    println!("===");
-    println!("Thanks for trying Distrod! Choose your distribution to install.");
-    println!("You can install your local .tar.xz, or download an image from the LXD* server.");
-    println!(" *LXD is a system container manager from Canonical. Distrod runs systemd, so you");
-    println!(" can try LXD if you like!");
-    println!("===");
+    println!(
+        r"
+        ██████╗ ██╗███████╗████████╗██████╗  ██████╗ ██████╗ 
+        ██╔══██╗██║██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗██╔══██╗
+        ██║  ██║██║███████╗   ██║   ██████╔╝██║   ██║██║  ██║
+        ██║  ██║██║╚════██║   ██║   ██╔══██╗██║   ██║██║  ██║
+        ██████╔╝██║███████║   ██║   ██║  ██║╚██████╔╝██████╔╝
+        ╚═════╝ ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ 
+=================================================================================
+Thanks for trying Distrod! Choose your distribution to install.                  
+You can install a local .tar.xz, or download an image from linuxcontainers.org.  
 
+* linuxcontainers.org is a vendor-neutral project that offers distro images for 
+  containers, which is not related to Distrod. LXC/LXD is one of its projects.
+  BTW, you can run Systemd with distrod, so you can try LXC/LXD with distrod!
+================================================================================="
+    );
     let lxd_root_tarxz = fetch_distro_image().with_context(|| "Failed to fetch a distro image.")?;
     let lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
 
     log::info!(
-        "Unpacking and merging the given rootfs to the distrod rootfs. This may take time..."
+        "Unpacking and merging the given rootfs to the distrod rootfs. This may take a while..."
     );
-    let tmp_dir = TempDir::new("distrod").with_context(|| "Failed to create a tempdir")?;
+    let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
     let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
     log::info!("Installing the rootfs...");
     wsl.register_distribution(DISTRO_NAME, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
+
+    let user_name = prompt_string("Please input the new Linux user name. This doesn't have to be the same as your Windows user name.", "user name", None)?;
+    let uid = add_user(&wsl, &user_name, tmp_dir);
+    if uid.is_err() {
+        log::warn!(
+            "Adding user failed, but you can try adding a new user as the root after installation."
+        );
+    }
+
     wsl.launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable -d", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+    if let Ok(uid) = uid {
+        // This should be done after enable, because this changes the default user from root.
+        wsl.configure_distribution(DISTRO_NAME, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
+            .with_context(|| "Failed to configure the default uid of the distribution.")?;
+    }
     log::info!("Installation of Distrod has completed.");
-    wsl.launch_interactive(DISTRO_NAME, "/bin/bash", true)
+    wsl.launch_interactive(DISTRO_NAME, "", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     Ok(())
 }
@@ -228,4 +254,38 @@ where
             .with_context(|| format!("Failed to add an entry to an archive. {:?}", path))?;
     }
     Ok(())
+}
+
+fn add_user(wsl: &wslapi::Library, user_name: &str, tmp_dir: TempDir) -> Result<u32> {
+    wsl.launch_interactive(
+        DISTRO_NAME,
+        format!(
+            "( ( which adduser > /dev/null 2>&1 && adduser {} ) || ( useradd '{}' && while ! passwd {}; do : ; done  ) ) && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
+            user_name, user_name, user_name, user_name
+        ),
+        true,
+    )?;
+    let uid_path = tmp_dir.path().join("uid");
+    let uid_file = File::create(&uid_path).with_context(|| "Failed to create a temp file.")?;
+    let status = wsl
+        .launch(
+            DISTRO_NAME,
+            format!("id -u {}", &user_name),
+            true,
+            wslapi::Stdio::null(),
+            uid_file,
+            wslapi::Stdio::null(),
+        )
+        .with_context(|| "Failed to launch id command.")?
+        .wait()
+        .with_context(|| "Failed to wait for the id command to finish.")?;
+    let uid_string = std::fs::read_to_string(&uid_path)
+        .with_context(|| "Failed to read the contents of id file.")?;
+    let uid_u32 = uid_string.trim().parse::<u32>().with_context(|| {
+        format!(
+            "id command has written an unexpected data: '{}'",
+            uid_string
+        )
+    })?;
+    Ok(uid_u32)
 }

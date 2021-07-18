@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
-use common::cli_ui::{choose_from_list, prompt_path};
-use common::local_image::LocalDistroImage;
 use distro::Distro;
+use libs::cli_ui::{choose_from_list, prompt_path};
+use libs::local_image::LocalDistroImage;
 use std::ffi::{CString, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -13,21 +13,15 @@ use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
 use xz2::read::XzDecoder;
 
-use common::distro_image::{
+use libs::command_alias::CommandAlias;
+use libs::distro;
+use libs::distro_image::{
     self, DistroImage, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
 };
-use common::lxd_image::LxdDistroImageList;
+use libs::lxd_image::LxdDistroImageList;
+use libs::passwd;
+use libs::passwd::drop_privilege;
 
-use crate::command_alias::CommandAlias;
-use crate::passwd::drop_privilege;
-
-mod command_alias;
-mod container;
-mod distro;
-mod mount_info;
-mod multifork;
-mod passwd;
-mod procfile;
 mod shell_hook;
 
 #[derive(Debug, StructOpt)]
@@ -81,6 +75,10 @@ pub struct ExecOpts {
     #[structopt(short, long)]
     user: Option<String>,
 
+    #[structopt(short, long)]
+    uid: Option<u32>,
+
+    #[structopt(short, long)]
     #[structopt(short, long)]
     working_directory: Option<OsString>,
 
@@ -177,7 +175,7 @@ fn is_executed_as_alias() -> bool {
 
 fn run_as_command_alias() -> Result<()> {
     if !is_executed_as_alias() {
-        bail!("Distrod is not run as an aliase");
+        bail!("Distrod is not run as an alias, but `run_as_command_alias` is called.");
     }
     let self_path =
         std::env::current_exe().with_context(|| anyhow!("Failed to get the current_exe."))?;
@@ -202,13 +200,10 @@ fn run_as_command_alias() -> Result<()> {
         std::process::exit(1);
     } else {
         let mut exec_args = vec![
-            OsString::from("distrod"),
-            OsString::from("exec"),
-            OsString::from("-r"),
-            OsString::from("/"),
-            OsString::from(format!("--arg0={}", &args[0])),
+            OsString::from("distrod-exec"),
             OsString::from("--"),
-            alias.get_source_path().as_os_str().to_owned(),
+            OsString::from(alias.get_source_path()),
+            OsString::from(&args[0]),
         ];
         exec_args.extend(args.iter().skip(1).map(OsString::from));
         let cargs: Vec<CString> = exec_args
@@ -218,7 +213,7 @@ fn run_as_command_alias() -> Result<()> {
                     .expect("CString must be able to be created from non-null bytes.")
             })
             .collect();
-        nix::unistd::execv(&CString::new("/opt/distrod/distrod")?, &cargs)?;
+        nix::unistd::execv(&CString::new("/opt/distrod/distrod-exec")?, &cargs)?;
         std::process::exit(1);
     }
 }
@@ -356,10 +351,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
 
     let host_root_path = OsString::from("/");
     let rootfs_path = opts.rootfs.as_ref().unwrap_or(&host_root_path);
-    let ids = match opts.user.map(|user| get_ids_from_name(&user, rootfs_path)) {
-        Some(ids) => Some(ids?),
-        None => None,
-    };
+    let ids = get_uid_gid(opts.user.as_ref(), opts.uid, rootfs_path)?;
 
     log::debug!("Executing a command in the distro.");
     let mut waiter = distro.exec_command(
@@ -378,7 +370,11 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     std::process::exit(status as i32)
 }
 
-fn get_ids_from_name<P: AsRef<Path>>(name: &str, rootfs_path: P) -> Result<(u32, u32)> {
+fn get_uid_gid<P: AsRef<Path>>(
+    name: Option<&String>,
+    uid: Option<u32>,
+    rootfs_path: P,
+) -> Result<Option<(u32, u32)>> {
     let mut passwd_file = passwd::PasswdFile::open(&rootfs_path.as_ref().join("etc/passwd"))
         .with_context(|| {
             format!(
@@ -386,12 +382,16 @@ fn get_ids_from_name<P: AsRef<Path>>(name: &str, rootfs_path: P) -> Result<(u32,
                 rootfs_path.as_ref()
             )
         })?;
-    let passwd = passwd_file.get_ent(name)?;
+    let passwd = match (name, uid) {
+        (Some(name), _) => passwd_file.get_ent_by_name(&name)?,
+        (_, Some(uid)) => passwd_file.get_ent_by_uid(uid)?,
+        _ => return Ok(None),
+    };
     if passwd.is_none() {
-        bail!("The given user '{}' does not exist.", &name);
+        bail!("The given user doesn't exist.");
     }
     let passwd = passwd.unwrap();
-    Ok((passwd.uid, passwd.gid))
+    Ok(Some((passwd.uid, passwd.gid)))
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {

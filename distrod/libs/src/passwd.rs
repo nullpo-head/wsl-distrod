@@ -24,10 +24,20 @@ impl PasswdFile {
         })
     }
 
-    pub fn get_ent(&mut self, user_name: &str) -> Result<Option<PasswdView>> {
+    pub fn get_ent_by_name(&mut self, user_name: &str) -> Result<Option<PasswdView>> {
         for entry in self.entries() {
             let entry = entry.with_context(|| "Failed to parse '/etc/passwd'.")?;
             if entry.name == user_name {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn get_ent_by_uid(&mut self, uid: u32) -> Result<Option<PasswdView>> {
+        for entry in self.entries() {
+            let entry = entry.with_context(|| "Failed to parse '/etc/passwd'.")?;
+            if entry.uid == uid {
                 return Ok(Some(entry));
             }
         }
@@ -205,20 +215,6 @@ mod tests {
         path::Path,
     };
     use tempfile::*;
-
-    impl PasswdFile {
-        fn change_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-            let mut passwd_file = File::open(path.as_ref())
-                .with_context(|| format!("Failed to open '{:?}'.", path.as_ref()))?;
-            let mut cont = String::new();
-            passwd_file.read_to_string(&mut cont).with_context(|| {
-                format!("Failed to read the contents of '{:?}'.", path.as_ref())
-            })?;
-            self.file_cont = cont;
-            self.path = path.as_ref().to_owned();
-            Ok(())
-        }
-    }
 
     static ROOT: PasswdView = PasswdView {
         name: "root",

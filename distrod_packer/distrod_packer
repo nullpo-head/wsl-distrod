@@ -23,13 +23,17 @@ def pack_rootfs(workspace_path: str, output_path: str):
     with tempfile.TemporaryDirectory() as temp_dir:
         work_dir = temp_dir + "/root"
         make_minimum_mountpoints(work_dir)
-        distrod_path = build_distrod(workspace_path, work_dir)
-        copy_dependency_libs(work_dir)
-        ld_path = get_ld_dir_in_container(os.path.basename(
-            extract_dependency_libs(work_dir + distrod_path)[0]))
-        modify_lib_search_path(work_dir + distrod_path,
-                               ld_path, get_lib_dir_in_container())
+        bin_names = ["distrod", "distrod-exec"]
+        for bin_name in bin_names:
+            bin_path = build(bin_name, workspace_path, work_dir)
+            copy_dependency_libs(bin_name, work_dir)
+            ld_path = get_ld_dir_in_container(os.path.basename(
+                extract_dependency_libs(work_dir + bin_path)[0]))
+            modify_lib_search_path(work_dir + bin_path,
+                                   ld_path, get_lib_dir_in_container())
         put_misc_files(work_dir)
+        set_permissions(work_dir)
+        set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
         compress_rootfs(work_dir, output_path)
 
 
@@ -43,20 +47,20 @@ def make_minimum_mountpoints(work_dir: str):
         os.makedirs(work_dir + dir)
 
 
-def build_distrod(workspace_path: str, work_dir: str) -> str:
+def build(bin_name: str, workspace_path: str, work_dir: str) -> str:
     dir_to_back = os.getcwd()
     os.chdir(workspace_path)
-    res = subprocess.run(["cargo", "build", "--release", "-p", "distrod"])
+    res = subprocess.run(["cargo", "build", "--release", "-p", bin_name])
     if res.returncode != 0:
         raise Exception("cargo build failed")
-    shutil.copy("./target/release/distrod",
-                work_dir + get_distrod_dir_in_container("distrod"))
+    shutil.copy(f"./target/release/{bin_name}",
+                work_dir + get_distrod_dir_in_container(bin_name))
     os.chdir(dir_to_back)
-    return get_distrod_dir_in_container("distrod")
+    return get_distrod_dir_in_container(bin_name)
 
 
-def copy_dependency_libs(work_dir: str):
-    distrod_bin = work_dir + get_distrod_dir_in_container("distrod")
+def copy_dependency_libs(bin_name: str, work_dir: str):
+    distrod_bin = work_dir + get_distrod_dir_in_container(bin_name)
     ld, libs = extract_dependency_libs(distrod_bin)
     ld_path = work_dir + get_ld_dir_in_container(os.path.basename(ld))
     shutil.copy(ld, ld_path)
@@ -65,8 +69,8 @@ def copy_dependency_libs(work_dir: str):
             lib, work_dir + get_lib_dir_in_container(os.path.basename(lib)))
 
 
-def extract_dependency_libs(bin: str) -> Tuple[str, List[str]]:
-    ldd = subprocess.run(["ldd", bin], capture_output=True)
+def extract_dependency_libs(bin_path: str) -> Tuple[str, List[str]]:
+    ldd = subprocess.run(["ldd", bin_path], capture_output=True)
     if ldd.returncode != 0:
         raise Exception(f"ldd failed.")
     ldd_output = [l.strip() for l in ldd.stdout.decode("utf-8").splitlines()]
@@ -94,6 +98,20 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
         raise Exception(f"command failed. {patch_args}")
 
 
+def set_permissions(work_dir: str):
+    dir_to_back = os.getcwd()
+    os.chdir(work_dir)
+    os.system("sudo chmod 755 .")
+    os.system("sudo chown -R root:root .")
+    os.chdir(dir_to_back)
+
+
+def set_suid(bin_path: str):
+    os.system(f"sudo chmod u+s {bin_path}")
+    os.system(f"sudo chmod g+s {bin_path}")
+    os.system(f"ls -l {bin_path}")
+
+
 def put_misc_files(work_dir: str):
     pass
 
@@ -101,11 +119,9 @@ def put_misc_files(work_dir: str):
 def compress_rootfs(work_dir: str, output_path: str):
     dir_to_back = os.getcwd()
     os.chdir(work_dir)
-    os.system(f"echo in $(pwd)")
-    os.system(f"sudo chmod 755 .")
-    os.system("sudo chown -R root:root .")
     os.system("sudo tar czf distrod_root.tar.gz *")
-    os.system("sudo chmod -R 777 .")
+    # Let the directory able to be deleted
+    os.system("sudo chown -R $(whoami):$(whoami) .")
     os.chdir(dir_to_back)
     shutil.copy(work_dir + "/distrod_root.tar.gz", output_path)
 
