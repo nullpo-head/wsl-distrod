@@ -260,7 +260,7 @@ fn add_user(wsl: &wslapi::Library, user_name: &str, tmp_dir: TempDir) -> Result<
     wsl.launch_interactive(
         DISTRO_NAME,
         format!(
-            "( ( which adduser > /dev/null 2>&1 && adduser {} ) || ( useradd '{}' && while ! passwd {}; do : ; done  ) ) && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
+            "( ( which adduser > /dev/null 2>&1 && adduser {} ) || ( useradd -m '{}' && while ! passwd {}; do : ; done  ) ) && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
             user_name, user_name, user_name, user_name
         ),
         true,
