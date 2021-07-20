@@ -298,6 +298,7 @@ fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntr
     let binds = [
         ("/init", true),
         ("/sys", false),
+        ("/dev", false),
         ("/mnt/wsl", false),
         ("/run/WSL", false),
         ("/etc/wsl.conf", true),
