@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use colored::*;
 use libs::distro::Distro;
+use libs::multifork::set_noninheritable_sig_ign;
 use nix::unistd::{Gid, Uid};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -105,6 +106,7 @@ where
         };
 
     log::debug!("Executing a command in the distro.");
+    set_noninheritable_sig_ign();
     let mut waiter = distro.exec_command::<_, _, _, _, &Path>(
         command.as_ref(),
         args,
@@ -113,9 +115,7 @@ where
         Some(ids),
     )?;
     drop_privilege(ids.0, ids.1);
-    let status = waiter
-        .wait()
-        .with_context(|| "Failed to wait the executed command.")?;
+    let status = waiter.wait();
     std::process::exit(status as i32)
 }
 

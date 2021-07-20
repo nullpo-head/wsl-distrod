@@ -3,6 +3,7 @@ use colored::*;
 use distro::Distro;
 use libs::cli_ui::{choose_from_list, prompt_path};
 use libs::local_image::LocalDistroImage;
+use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -354,6 +355,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     let ids = get_uid_gid(opts.user.as_ref(), opts.uid, rootfs_path)?;
 
     log::debug!("Executing a command in the distro.");
+    set_noninheritable_sig_ign();
     let mut waiter = distro.exec_command(
         &opts.command,
         &opts.args,
@@ -364,9 +366,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     if let Some((uid, gid)) = ids {
         drop_privilege(uid, gid);
     }
-    let status = waiter
-        .wait()
-        .with_context(|| "Failed to wait the executed command.")?;
+    let status = waiter.wait();
     std::process::exit(status as i32)
 }
 

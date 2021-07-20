@@ -277,8 +277,7 @@ fn add_user(wsl: &wslapi::Library, user_name: &str, tmp_dir: TempDir) -> Result<
             wslapi::Stdio::null(),
         )
         .with_context(|| "Failed to launch id command.")?
-        .wait()
-        .with_context(|| "Failed to wait for the id command to finish.")?;
+        .wait();
     let uid_string = std::fs::read_to_string(&uid_path)
         .with_context(|| "Failed to read the contents of id file.")?;
     let uid_u32 = uid_string.trim().parse::<u32>().with_context(|| {
