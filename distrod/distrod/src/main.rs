@@ -182,41 +182,21 @@ fn run_as_command_alias() -> Result<()> {
         std::env::current_exe().with_context(|| anyhow!("Failed to get the current_exe."))?;
     let alias = CommandAlias::open_from_link(&self_path)?;
     let args: Vec<_> = std::env::args().into_iter().collect();
-    if Distro::is_inside_running_distro() {
-        let path =
-            CString::new(alias.get_source_path().as_os_str().as_bytes()).with_context(|| {
-                format!(
-                    "Failed to construct a CString for the alias command.: '{:?}'",
-                    alias.get_source_path()
-                )
-            })?;
-        let cargs: Vec<CString> = args
-            .into_iter()
-            .map(|arg| {
-                CString::new(arg.as_bytes())
-                    .expect("CString must be able to be created from non-null bytes.")
-            })
-            .collect();
-        nix::unistd::execv(&path, &cargs)?;
-        std::process::exit(1);
-    } else {
-        let mut exec_args = vec![
-            OsString::from("distrod-exec"),
-            OsString::from("--"),
-            OsString::from(alias.get_source_path()),
-            OsString::from(&args[0]),
-        ];
-        exec_args.extend(args.iter().skip(1).map(OsString::from));
-        let cargs: Vec<CString> = exec_args
-            .into_iter()
-            .map(|arg| {
-                CString::new(arg.as_bytes())
-                    .expect("CString must be able to be created from non-null bytes.")
-            })
-            .collect();
-        nix::unistd::execv(&CString::new("/opt/distrod/distrod-exec")?, &cargs)?;
-        std::process::exit(1);
-    }
+    let mut exec_args = vec![
+        OsString::from("distrod-exec"),
+        OsString::from("--"),
+        OsString::from(alias.get_source_path()),
+    ];
+    exec_args.extend(args.iter().map(OsString::from));
+    let cargs: Vec<CString> = exec_args
+        .into_iter()
+        .map(|arg| {
+            CString::new(arg.as_bytes())
+                .expect("CString must be able to be created from non-null bytes.")
+        })
+        .collect();
+    nix::unistd::execv(&CString::new("/opt/distrod/distrod-exec")?, &cargs)?;
+    std::process::exit(1);
 }
 
 fn run(opts: Opts) -> Result<()> {

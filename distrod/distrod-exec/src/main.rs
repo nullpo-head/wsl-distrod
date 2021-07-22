@@ -3,8 +3,9 @@ use colored::*;
 use libs::distro::Distro;
 use libs::multifork::set_noninheritable_sig_ign;
 use nix::unistd::{Gid, Uid};
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CString, OsStr, OsString};
 use std::io::Write;
+use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::str::FromStr;
 use structopt::StructOpt;
@@ -78,10 +79,45 @@ fn init_logger(log_level: &Option<LogLevel>) {
 }
 
 fn run(opts: Opts) -> Result<()> {
-    exec_command("/", &opts.command, &opts.arg0, &opts.args)
+    if Distro::is_inside_running_distro() {
+        exec_command(&opts.command, &opts.arg0, &opts.args)
+    } else {
+        exec_command_in_distro("/", &opts.command, &opts.arg0, &opts.args)
+    }
 }
 
-fn exec_command<P1, P2, S1, S2>(rootfs: P1, command: P2, arg0: S1, args: &[S2]) -> Result<()>
+fn exec_command<P1, S1, S2>(command: P1, arg0: S1, args: &[S2]) -> Result<()>
+where
+    P1: AsRef<Path>,
+    S1: AsRef<OsStr>,
+    S2: AsRef<OsStr>,
+{
+    drop_privilege(
+        nix::unistd::getuid().as_raw(),
+        nix::unistd::getgid().as_raw(),
+    );
+
+    let path = CString::new(command.as_ref().as_os_str().as_bytes()).with_context(|| {
+        format!(
+            "Failed to construct a CString for the alias command.: '{:?}'",
+            command.as_ref()
+        )
+    })?;
+    let mut cargs: Vec<CString> = vec![CString::new(arg0.as_ref().as_bytes())?];
+    cargs.extend(args.iter().map(|arg| {
+        CString::new(arg.as_ref().as_bytes())
+            .expect("CString must be able to be created from non-null bytes.")
+    }));
+    nix::unistd::execv(&path, &cargs)?;
+    std::process::exit(1);
+}
+
+fn exec_command_in_distro<P1, P2, S1, S2>(
+    rootfs: P1,
+    command: P2,
+    arg0: S1,
+    args: &[S2],
+) -> Result<()>
 where
     P1: AsRef<Path>,
     P2: AsRef<Path>,
