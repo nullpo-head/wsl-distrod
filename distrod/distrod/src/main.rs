@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use distro::Distro;
 use libs::cli_ui::{choose_from_list, prompt_path};
+use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
@@ -195,7 +196,8 @@ fn run_as_command_alias() -> Result<()> {
                 .expect("CString must be able to be created from non-null bytes.")
         })
         .collect();
-    nix::unistd::execv(&CString::new("/opt/distrod/distrod-exec")?, &cargs)?;
+    let distrod_exec_path = distrod_config::get_distrod_exec_bin_path();
+    nix::unistd::execv(&CString::new(distrod_exec_path)?, &cargs)?;
     std::process::exit(1);
 }
 

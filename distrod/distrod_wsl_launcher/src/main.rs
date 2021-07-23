@@ -6,6 +6,7 @@ use flate2::write::GzEncoder;
 use libs::cli_ui::prompt_string;
 use libs::cli_ui::{self};
 use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
+use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
 use std::fs::File;
@@ -163,8 +164,12 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
         );
     }
 
-    wsl.launch_interactive(DISTRO_NAME, "/opt/distrod/distrod enable -d", true)
-        .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+    wsl.launch_interactive(
+        DISTRO_NAME,
+        format!("{} enable -d", distrod_config::get_distrod_bin_path()),
+        true,
+    )
+    .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     if let Ok(uid) = uid {
         // This should be done after enable, because this changes the default user from root.
         wsl.configure_distribution(DISTRO_NAME, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)

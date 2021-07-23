@@ -2,23 +2,23 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
+use crate::distrod_config;
+
 pub struct CommandAlias {
     source_path: PathBuf,
     link_path: PathBuf,
 }
 
-static DISTROD_ALIAS_ROOT: &str = "/opt/distrod/alias";
-
 impl CommandAlias {
     pub fn is_alias<P: AsRef<Path>>(path: P) -> bool {
-        path.as_ref().starts_with(DISTROD_ALIAS_ROOT)
+        path.as_ref().starts_with(distrod_config::get_alias_dir())
     }
 
     pub fn open_from_source<P: AsRef<Path>>(
         source: P,
         creates: bool,
     ) -> Result<Option<CommandAlias>> {
-        let link_path = Path::new(DISTROD_ALIAS_ROOT).join(
+        let link_path = Path::new(distrod_config::get_alias_dir()).join(
             source.as_ref().strip_prefix("/").with_context(|| {
                 format!(
                     "The given path is not an absolute path: {:?}",
@@ -52,7 +52,7 @@ impl CommandAlias {
     pub fn open_from_link<P: AsRef<Path>>(link_path: P) -> Result<CommandAlias> {
         let source_path = link_path
             .as_ref()
-            .strip_prefix(DISTROD_ALIAS_ROOT)
+            .strip_prefix(distrod_config::get_alias_dir())
             .with_context(|| {
                 format!(
                     "The given link does not exist in the alias directory.: '{:?}'",

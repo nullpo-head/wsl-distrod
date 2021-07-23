@@ -1,5 +1,6 @@
 pub mod cli_ui;
 pub mod distro_image;
+pub mod distrod_config;
 pub mod local_image;
 pub mod lxd_image;
 

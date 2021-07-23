@@ -209,6 +209,8 @@ pub fn drop_privilege(uid: u32, gid: u32) {
 
 #[cfg(test)]
 mod tests {
+    use crate::distrod_config;
+
     use super::*;
     use std::{
         io::{Seek, SeekFrom},
@@ -322,9 +324,8 @@ mod tests {
 
         let mut passwd_file = PasswdFile::open(tmp.path())?;
         passwd_file.update(|passwd| {
-            let mut new_shell = PathBuf::from(passwd.shell);
-            new_shell = new_shell.strip_prefix("/").unwrap().to_owned();
-            new_shell = Path::new("/opt/distrod/alias/").join(new_shell);
+            let mut new_shell = PathBuf::from(distrod_config::get_alias_dir());
+            new_shell.push(Path::new(passwd.shell).strip_prefix("/").unwrap());
             Ok(Some(Passwd {
                 name: passwd.name.to_owned(),
                 passwd: passwd.passwd.to_owned(),
