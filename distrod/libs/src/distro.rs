@@ -6,6 +6,7 @@ use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::container::Container;
+use crate::distrod_config::{self, DistrodConfig};
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 
@@ -17,14 +18,23 @@ pub struct Distro {
 }
 
 impl Distro {
-    pub fn get_installed_distro<P: AsRef<Path>>(rootfs: P) -> Result<Option<Distro>> {
-        let path_buf = PathBuf::from(rootfs.as_ref());
-        if !path_buf.is_dir() {
-            return Ok(None);
+    pub fn get_installed_distro<P: AsRef<Path>>(rootfs: Option<P>) -> Result<Option<Distro>> {
+        let create_container = |path: &Path| {
+            if !path.is_dir() {
+                return Ok(None);
+            }
+            let container =
+                Container::new(path).with_context(|| "Failed to initialize a container")?;
+            Ok(Some(Distro { container }))
+        };
+        match rootfs {
+            Some(ref p) => create_container(p.as_ref()),
+            None => {
+                let config = DistrodConfig::get()
+                    .with_context(|| "Failed to acquire the Distrod config.")?;
+                create_container(config.distrod.default_distro_image.as_path())
+            }
         }
-        let container =
-            Container::new(&path_buf).with_context(|| "Failed to initialize a container")?;
-        Ok(Some(Distro { container }))
     }
 
     pub fn get_running_distro() -> Result<Option<Distro>> {

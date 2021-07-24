@@ -82,7 +82,7 @@ fn run(opts: Opts) -> Result<()> {
     if Distro::is_inside_running_distro() {
         exec_command(&opts.command, &opts.arg0, &opts.args)
     } else {
-        exec_command_in_distro("/", &opts.command, &opts.arg0, &opts.args)
+        exec_command_in_distro(&opts.command, &opts.arg0, &opts.args)
     }
 }
 
@@ -112,15 +112,9 @@ where
     std::process::exit(1);
 }
 
-fn exec_command_in_distro<P1, P2, S1, S2>(
-    rootfs: P1,
-    command: P2,
-    arg0: S1,
-    args: &[S2],
-) -> Result<()>
+fn exec_command_in_distro<P1, S1, S2>(command: P1, arg0: S1, args: &[S2]) -> Result<()>
 where
     P1: AsRef<Path>,
-    P2: AsRef<Path>,
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
@@ -136,8 +130,7 @@ where
                 // Systemd requires the real uid / gid to be the root.
                 nix::unistd::setuid(Uid::from_raw(0))?;
                 nix::unistd::setgid(Gid::from_raw(0))?;
-                let distro = launch_distro(rootfs.as_ref())?;
-                distro
+                launch_distro()?
             }
         };
 
@@ -155,14 +148,11 @@ where
     std::process::exit(status as i32)
 }
 
-fn launch_distro<P: AsRef<Path>>(rootfs: P) -> Result<Distro> {
-    let distro = Distro::get_installed_distro(rootfs.as_ref())
+fn launch_distro() -> Result<Distro> {
+    let distro = Distro::get_installed_distro::<&Path>(None)
         .with_context(|| "Failed to retrieve the installed distro.")?;
     if distro.is_none() {
-        bail!(
-            "Any distribution is not installed in '{:?}' for Distrod.",
-            rootfs.as_ref()
-        )
+        bail!("No default distro is configured.",)
     }
     let mut distro = distro.unwrap();
     distro

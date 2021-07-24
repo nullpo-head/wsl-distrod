@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use distro::Distro;
 use libs::cli_ui::{choose_from_list, prompt_path};
-use libs::distrod_config;
+use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
@@ -280,9 +280,18 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
     };
 
     log::info!("Unpacking...");
-    let install_dir = opts
-        .install_dir
-        .unwrap_or_else(|| format!("/var/lib/distrod/{}", &image_name).into());
+    let install_dir = match opts.install_dir {
+        Some(install_dir) => install_dir,
+        None => {
+            let def_install_path =
+                DistrodConfig::get().with_context(|| "Failed to ghet the Distrod config.")?;
+            def_install_path
+                .distrod
+                .distro_images_dir
+                .join(&image_name)
+                .into()
+        }
+    };
     if !Path::new(&install_dir).exists() {
         std::fs::create_dir_all(&install_dir)
             .with_context(|| format!("Failed to make a directory: {:?}.", &install_dir))?;
@@ -304,7 +313,7 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
 
 fn launch_distro(opts: StartOpts) -> Result<()> {
     let distro =
-        Distro::get_installed_distro(&opts.rootfs.as_ref().unwrap_or(&OsString::from("/")))
+        Distro::get_installed_distro(Some(&opts.rootfs.as_ref().unwrap_or(&OsString::from("/"))))
             .with_context(|| "Failed to retrieve the installed distro.")?;
     if distro.is_none() {
         bail!(

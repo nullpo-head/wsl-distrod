@@ -31,7 +31,7 @@ def pack_rootfs(workspace_path: str, output_path: str):
                 extract_dependency_libs(work_dir + bin_path)[0]))
             modify_lib_search_path(work_dir + bin_path,
                                    ld_path, get_lib_dir_in_container())
-        put_misc_files(work_dir)
+        put_static_files(work_dir)
         set_permissions(work_dir)
         set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
         compress_rootfs(work_dir, output_path)
@@ -91,7 +91,6 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
     ret = subprocess.run(patch_args)
     if ret.returncode != 0:
         raise Exception(f"command failed. {patch_args}")
-    print(f"{rpath=}")
     patch_args = ["patchelf", "--set-rpath", rpath, bin_path]
     ret = subprocess.run(patch_args)
     if ret.returncode != 0:
@@ -112,8 +111,11 @@ def set_suid(bin_path: str):
     os.system(f"ls -l {bin_path}")
 
 
-def put_misc_files(work_dir: str):
-    pass
+def put_static_files(work_dir: str):
+    shutil.copy(get_resources_dir("distrod.toml"),
+                work_dir + get_distrod_dir_in_container())
+    os.system(
+        f"sudo chown root:root {work_dir + get_distrod_dir_in_container('distrod.toml')}")
 
 
 def compress_rootfs(work_dir: str, output_path: str):
@@ -124,6 +126,14 @@ def compress_rootfs(work_dir: str, output_path: str):
     os.system("sudo chown -R $(whoami):$(whoami) .")
     os.chdir(dir_to_back)
     shutil.copy(work_dir + "/distrod_root.tar.gz", output_path)
+
+
+def get_resources_dir(inner_path: Optional[str] = None) -> str:
+    path = os.path.dirname(__file__) + "/resources"
+    print(f"resource: {path}")
+    if inner_path:
+        path = f"{path}/{inner_path}"
+    return path
 
 
 def get_lib_dir_in_container(inner_path: Optional[str] = None) -> str:

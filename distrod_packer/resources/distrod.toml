@@ -1,0 +1,3 @@
+[distrod]
+default_distro_image = "/"
+distro_images_dir = "/var/lib/distrod"
