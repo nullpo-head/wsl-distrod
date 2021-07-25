@@ -131,10 +131,10 @@ where
 
     log::debug!("Executing a command in the distro.");
     set_noninheritable_sig_ign();
-    let mut waiter = distro.exec_command::<_, _, _, _, &Path>(
+    let mut waiter = distro.exec_command(
         command.as_ref(),
         args,
-        None,
+        Some(std::env::current_dir().with_context(|| "Failed to get the current dir.")?),
         Some(arg0),
         Some(&cred),
     )?;
