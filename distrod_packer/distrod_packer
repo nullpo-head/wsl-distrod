@@ -15,34 +15,70 @@ def main():
         'workspace_path', help='The path to distrod\'s workspace directory.', type=str)
     parser.add_argument(
         'output_path', help='The path of the output rootfs image.', type=str)
+    parser.add_argument(
+        '--make_distrod_release', '-r', help='Pack the release of in-distro distrod command instead of the rootfs.', action='store_true')
     args = parser.parse_args()
-    pack_rootfs(args.workspace_path, args.output_path)
+    if args.make_distrod_release:
+        pack_distrod_release(args.workspace_path,
+                             os.path.abspath(args.output_path))
+    else:
+        pack_rootfs(args.workspace_path, os.path.abspath(args.output_path))
 
 
 def pack_rootfs(workspace_path: str, output_path: str):
+    if not output_path.startswith("/"):
+        raise Exception("output path should be an absolute path")
     with tempfile.TemporaryDirectory() as temp_dir:
         work_dir = temp_dir + "/root"
-        make_minimum_mountpoints(work_dir)
-        bin_names = ["distrod", "distrod-exec"]
-        for bin_name in bin_names:
-            bin_path = build(bin_name, workspace_path, work_dir)
-            copy_dependency_libs(bin_name, work_dir)
-            ld_path = get_ld_dir_in_container(os.path.basename(
-                extract_dependency_libs(work_dir + bin_path)[0]))
-            modify_lib_search_path(work_dir + bin_path,
-                                   ld_path, get_lib_dir_in_container())
-        put_static_files(work_dir)
-        set_permissions(work_dir)
-        set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
-        compress_rootfs(work_dir, output_path)
+        make_rootfs(workspace_path, work_dir)
+        compress_entire_tree(work_dir, output_path)
+        make_dir_deletable(work_dir)
+
+
+def pack_distrod_release(workspace_path: str, output_path: str):
+    if not output_path.startswith("/"):
+        raise Exception("output path should be an absolute path")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        work_dir = temp_dir + "/root"
+        make_distrod_distribution(workspace_path, work_dir)
+        compress_entire_tree(
+            work_dir + get_distrod_dir_in_container(), output_path)
+        make_dir_deletable(work_dir)
+
+
+def make_rootfs(workspace_path: str, output_dst: str):
+    make_minimum_mountpoints(output_dst)
+    make_distrod_distribution(workspace_path, output_dst)
+
+
+def make_distrod_distribution(workspace_path: str, output_dst: str):
+    work_dir = output_dst
+    make_distrod_distribution_dirs(work_dir)
+    bin_names = ["distrod", "distrod-exec"]
+    for bin_name in bin_names:
+        bin_path = build(bin_name, workspace_path, work_dir)
+        copy_dependency_libs(bin_name, work_dir)
+        ld_path = get_ld_dir_in_container(os.path.basename(
+            extract_dependency_libs(work_dir + bin_path)[0]))
+        modify_lib_search_path(work_dir + bin_path,
+                               ld_path, get_lib_dir_in_container())
+    copy_distrod_distribution_resources(work_dir)
+    set_permissions(work_dir)
+    set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
 
 
 def make_minimum_mountpoints(work_dir: str):
-    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc",
-            get_distrod_dir_in_container(),
-            get_distrod_dir_in_container("alias"),
-            get_distrod_dir_in_container("lib"),
-            get_distrod_dir_in_container("ld")]
+    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
+    for dir in dirs:
+        os.makedirs(work_dir + dir)
+
+
+def make_distrod_distribution_dirs(work_dir: str):
+    dirs = [
+        get_distrod_dir_in_container(),
+        get_distrod_dir_in_container("alias"),
+        get_distrod_dir_in_container("lib"),
+        get_distrod_dir_in_container("ld")]
     for dir in dirs:
         os.makedirs(work_dir + dir)
 
@@ -108,29 +144,36 @@ def set_permissions(work_dir: str):
 def set_suid(bin_path: str):
     os.system(f"sudo chmod u+s {bin_path}")
     os.system(f"sudo chmod g+s {bin_path}")
-    os.system(f"ls -l {bin_path}")
 
 
-def put_static_files(work_dir: str):
+def copy_distrod_distribution_resources(work_dir: str):
     shutil.copy(get_resources_dir("distrod.toml"),
                 work_dir + get_distrod_dir_in_container())
     os.system(
         f"sudo chown root:root {work_dir + get_distrod_dir_in_container('distrod.toml')}")
 
 
-def compress_rootfs(work_dir: str, output_path: str):
+def compress_entire_tree(tree: str, output_path: str):
     dir_to_back = os.getcwd()
-    os.chdir(work_dir)
-    os.system("sudo tar czf distrod_root.tar.gz *")
+    os.chdir(tree)
+    os.system("sudo tar czf compressed.tar.gz *")
+    #shutil.copy(tree + "/distrod_root.tar.gz", output_path)
+    shutil.copy(tree + "/compressed.tar.gz", output_path)
+
+
+def make_dir_deletable(tree: str):
+    dir_to_back = os.getcwd()
+    os.chdir(tree)
     # Let the directory able to be deleted
+    os.system("echo test")
+    os.system("pwd")
+    os.system("sudo echo chown -R $(whoami):$(whoami) .")
     os.system("sudo chown -R $(whoami):$(whoami) .")
     os.chdir(dir_to_back)
-    shutil.copy(work_dir + "/distrod_root.tar.gz", output_path)
 
 
 def get_resources_dir(inner_path: Optional[str] = None) -> str:
     path = os.path.dirname(__file__) + "/resources"
-    print(f"resource: {path}")
     if inner_path:
         path = f"{path}/{inner_path}"
     return path
