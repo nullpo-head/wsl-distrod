@@ -316,6 +316,13 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
 }
 
 fn launch_distro(opts: StartOpts) -> Result<()> {
+    if Distro::is_inside_running_distro()
+        || Distro::get_running_distro()
+            .with_context(|| "Failed to see if there's a running distro.")?
+            .is_some()
+    {
+        bail!("There is already a running distro.");
+    }
     let distro =
         Distro::get_installed_distro(Some(&opts.rootfs.as_ref().unwrap_or(&OsString::from("/"))))
             .with_context(|| "Failed to retrieve the installed distro.")?;
@@ -325,6 +332,7 @@ fn launch_distro(opts: StartOpts) -> Result<()> {
             &opts.rootfs
         )
     }
+
     let mut distro = distro.unwrap();
     distro
         .launch()
