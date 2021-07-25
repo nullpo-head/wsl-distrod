@@ -165,9 +165,6 @@ def make_dir_deletable(tree: str):
     dir_to_back = os.getcwd()
     os.chdir(tree)
     # Let the directory able to be deleted
-    os.system("echo test")
-    os.system("pwd")
-    os.system("sudo echo chown -R $(whoami):$(whoami) .")
     os.system("sudo chown -R $(whoami):$(whoami) .")
     os.chdir(dir_to_back)
 
