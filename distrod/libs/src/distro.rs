@@ -9,6 +9,7 @@ use crate::container::Container;
 use crate::distrod_config::{self, DistrodConfig};
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
+use crate::passwd::Credential;
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
@@ -83,7 +84,7 @@ impl Distro {
         args: I,
         wd: Option<P>,
         arg0: Option<T2>,
-        ids: Option<(u32, u32)>,
+        cred: Option<&Credential>,
     ) -> Result<Waiter>
     where
         I: IntoIterator<Item = T1>,
@@ -94,7 +95,7 @@ impl Distro {
     {
         log::debug!("Distro::exec_command.");
         self.container
-            .exec_command(command, args, wd, arg0, ids)
+            .exec_command(command, args, wd, arg0, cred)
             .with_context(|| "Failed to exec command in the container")
     }
 

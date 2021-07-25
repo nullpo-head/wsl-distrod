@@ -2,7 +2,56 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::{fs::File, io::Read};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use nix::unistd::{Gid, Uid};
+
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub uid: Uid,
+    pub gid: Gid,
+    pub groups: Vec<Gid>,
+}
+
+pub enum IdCredential<'a> {
+    Uid(u32),
+    Name(&'a str),
+}
+
+impl Credential {
+    pub fn new(uid: Uid, gid: Gid, groups: Vec<Gid>) -> Credential {
+        Credential { uid, gid, groups }
+    }
+
+    pub fn from_user(cred: IdCredential, passwd_file: &mut PasswdFile) -> Result<Credential> {
+        let passwd = match cred {
+            IdCredential::Name(name) => passwd_file.get_ent_by_name(&name)?,
+            IdCredential::Uid(uid) => passwd_file.get_ent_by_uid(uid)?,
+        };
+        if passwd.is_none() {
+            bail!("The given user doesn't exist.");
+        }
+        let passwd = passwd.unwrap();
+        Ok(Credential {
+            uid: Uid::from_raw(passwd.uid),
+            gid: Gid::from_raw(passwd.gid),
+            groups: vec![Gid::from_raw(passwd.gid)],
+        })
+    }
+
+    pub fn drop_privilege(&self) {
+        let inner = || -> Result<()> {
+            nix::unistd::setgroups(&self.groups)?;
+            nix::unistd::setresgid(self.gid, self.gid, self.gid)?;
+            nix::unistd::setresuid(self.uid, self.uid, self.uid)?;
+
+            Ok(())
+        };
+        if inner().is_err() {
+            log::error!("Failed to drop_privilege. Aborting.");
+            std::process::exit(1);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PasswdFile {
@@ -187,23 +236,6 @@ impl PasswdView<'_> {
                 .next()
                 .ok_or_else(|| anyhow!("invalid shell format /etc/passwd."))?,
         })
-    }
-}
-
-pub fn drop_privilege(uid: u32, gid: u32) {
-    let inner = || -> Result<()> {
-        let uid = nix::unistd::Uid::from_raw(uid);
-        let gid = nix::unistd::Gid::from_raw(gid);
-
-        nix::unistd::setgroups(&[gid])?;
-        nix::unistd::setresgid(gid, gid, gid)?;
-        nix::unistd::setresuid(uid, uid, uid)?;
-
-        Ok(())
-    };
-    if inner().is_err() {
-        log::error!("Failed to drop_privilege. Aborting.");
-        std::process::exit(1);
     }
 }
 

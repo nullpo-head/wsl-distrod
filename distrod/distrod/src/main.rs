@@ -21,8 +21,8 @@ use libs::distro_image::{
     self, DistroImage, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
 };
 use libs::lxd_image::LxdDistroImageList;
-use libs::passwd;
-use libs::passwd::drop_privilege;
+use libs::passwd::IdCredential;
+use libs::passwd::{self, Credential};
 
 mod shell_hook;
 
@@ -347,7 +347,7 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
 
     let host_root_path = OsString::from("/");
     let rootfs_path = opts.rootfs.as_ref().unwrap_or(&host_root_path);
-    let ids = get_uid_gid(opts.user.as_ref(), opts.uid, rootfs_path)?;
+    let cred = get_credential(opts.user.as_ref(), opts.uid, rootfs_path)?;
 
     log::debug!("Executing a command in the distro.");
     set_noninheritable_sig_ign();
@@ -356,20 +356,20 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
         &opts.args,
         opts.working_directory,
         opts.arg0,
-        ids,
+        cred.as_ref(),
     )?;
-    if let Some((uid, gid)) = ids {
-        drop_privilege(uid, gid);
+    if let Some(cred) = cred {
+        cred.drop_privilege();
     }
     let status = waiter.wait();
     std::process::exit(status as i32)
 }
 
-fn get_uid_gid<P: AsRef<Path>>(
+fn get_credential<P: AsRef<Path>>(
     name: Option<&String>,
     uid: Option<u32>,
     rootfs_path: P,
-) -> Result<Option<(u32, u32)>> {
+) -> Result<Option<Credential>> {
     let mut passwd_file = passwd::PasswdFile::open(&rootfs_path.as_ref().join("etc/passwd"))
         .with_context(|| {
             format!(
@@ -377,16 +377,12 @@ fn get_uid_gid<P: AsRef<Path>>(
                 rootfs_path.as_ref()
             )
         })?;
-    let passwd = match (name, uid) {
-        (Some(name), _) => passwd_file.get_ent_by_name(&name)?,
-        (_, Some(uid)) => passwd_file.get_ent_by_uid(uid)?,
+    let cred = match (name, uid) {
+        (Some(name), _) => Credential::from_user(IdCredential::Name(name), &mut passwd_file)?,
+        (_, Some(uid)) => Credential::from_user(IdCredential::Uid(uid), &mut passwd_file)?,
         _ => return Ok(None),
     };
-    if passwd.is_none() {
-        bail!("The given user doesn't exist.");
-    }
-    let passwd = passwd.unwrap();
-    Ok(Some((passwd.uid, passwd.gid)))
+    Ok(Some(cred))
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {

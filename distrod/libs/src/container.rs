@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mount_info::{get_mount_entries, MountEntry};
 use crate::multifork::{CommandByMultiFork, Waiter};
-use crate::passwd::drop_privilege;
+use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -111,7 +111,7 @@ impl Container {
         args: I,
         wd: Option<P>,
         arg0: Option<T2>,
-        ids: Option<(u32, u32)>,
+        cred: Option<&Credential>,
     ) -> Result<Waiter>
     where
         I: IntoIterator<Item = T1>,
@@ -136,8 +136,8 @@ impl Container {
         command.pre_second_fork(|| {
             enter_namespace(self.init_pid.unwrap())
                 .with_context(|| "Failed to enter the init's namespace")?;
-            if let Some((uid, gid)) = ids {
-                drop_privilege(uid, gid);
+            if let Some(ref cred) = cred {
+                cred.drop_privilege();
             }
             Ok(())
         });

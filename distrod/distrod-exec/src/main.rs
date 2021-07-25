@@ -11,7 +11,7 @@ use std::str::FromStr;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
 
-use libs::passwd::drop_privilege;
+use libs::passwd::Credential;
 
 /// Distrod-exec is a small helper command to allow a non-root user to run programs under the systemd container.
 /// It implements the subset features of distrod's exec subcommand, but has the setuid bit set.
@@ -92,10 +92,8 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
-    drop_privilege(
-        nix::unistd::getuid().as_raw(),
-        nix::unistd::getgid().as_raw(),
-    );
+    let cred = get_real_credential()?;
+    cred.drop_privilege();
 
     let path = CString::new(command.as_ref().as_os_str().as_bytes()).with_context(|| {
         format!(
@@ -118,10 +116,7 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
-    let ids = (
-        nix::unistd::getuid().as_raw(),
-        nix::unistd::getgid().as_raw(),
-    );
+    let cred = get_real_credential()?;
 
     let distro =
         match Distro::get_running_distro().with_context(|| "Failed to get the running distro.")? {
@@ -141,11 +136,22 @@ where
         args,
         None,
         Some(arg0),
-        Some(ids),
+        Some(&cred),
     )?;
-    drop_privilege(ids.0, ids.1);
+    cred.drop_privilege();
     let status = waiter.wait();
     std::process::exit(status as i32)
+}
+
+fn get_real_credential() -> Result<Credential> {
+    let egid = nix::unistd::getegid(); // root
+    let groups = nix::unistd::getgroups().with_context(|| "Failed to get grups")?;
+    let groups = groups.into_iter().filter(|group| *group != egid).collect();
+    Ok(Credential::new(
+        nix::unistd::getuid(),
+        nix::unistd::getgid(),
+        groups,
+    ))
 }
 
 fn launch_distro() -> Result<Distro> {
