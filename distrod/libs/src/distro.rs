@@ -1,21 +1,30 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::container::Container;
-use crate::distrod_config::{self, DistrodConfig};
+use crate::distrod_config::DistrodConfig;
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
+use crate::procfile::ProcFile;
+use serde::{Deserialize, Serialize};
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
 pub struct Distro {
+    rootfs: PathBuf,
     container: Container,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DistroRunInfo {
+    rootfs: PathBuf,
+    init_pid: u32,
 }
 
 impl Distro {
@@ -24,9 +33,11 @@ impl Distro {
             if !path.is_dir() {
                 return Ok(None);
             }
-            let container =
-                Container::new(path).with_context(|| "Failed to initialize a container")?;
-            Ok(Some(Distro { container }))
+            let container = Container::new();
+            Ok(Some(Distro {
+                rootfs: PathBuf::from(path),
+                container,
+            }))
         };
         match rootfs {
             Some(ref p) => create_container(p.as_ref()),
@@ -39,23 +50,20 @@ impl Distro {
     }
 
     pub fn get_running_distro() -> Result<Option<Distro>> {
-        let run_info = get_distro_run_info_file(false, false)
+        let run_info_file = get_distro_run_info_file(false, false)
             .with_context(|| "Failed to open the distro run info file.")?;
-        if run_info.is_none() {
+        if run_info_file.is_none() {
             return Ok(None);
         }
-        let mut run_info = run_info.unwrap();
-        let mut json = String::new();
-        run_info.read_to_string(&mut json)?;
-
-        let container = Container::get_running_container_from_json(&json)
-            .with_context(|| "Failed to import running container info.")?;
-        if container.is_none() {
+        let run_info = BufReader::new(run_info_file.unwrap());
+        let run_info: DistroRunInfo = serde_json::from_reader(run_info)?;
+        if ProcFile::from_pid(run_info.init_pid)?.is_none() {
             return Ok(None);
         }
-        let container = container.unwrap();
-
-        Ok(Some(Distro { container }))
+        Ok(Some(Distro {
+            rootfs: run_info.rootfs,
+            container: Container::from_pid(run_info.init_pid)?,
+        }))
     }
 
     pub fn is_inside_running_distro() -> bool {
@@ -70,9 +78,8 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
-        let _ = self
-            .container
-            .launch(None, DISTRO_OLD_ROOT_PATH)
+        self.container
+            .launch(None, &self.rootfs, DISTRO_OLD_ROOT_PATH)
             .with_context(|| "Failed to launch a container.")?;
         self.export_run_info()?;
         Ok(())
@@ -108,10 +115,19 @@ impl Distro {
             fs::remove_file(&DISTRO_RUN_INFO_PATH)
                 .with_context(|| "Failed to remove the existing run info file.")?;
         }
-        let mut file = get_distro_run_info_file(true, true)
-            .with_context(|| "Failed to create a run info file.")?
-            .expect("[BUG] get_distro_run_info_file shuold return Some when create:true");
-        file.write_all(self.container.run_info_as_json()?.as_bytes())
+        let mut file = BufWriter::new(
+            get_distro_run_info_file(true, true)
+                .with_context(|| "Failed to create a run info file.")?
+                .expect("[BUG] get_distro_run_info_file shuold return Some when create:true"),
+        );
+        let run_info = DistroRunInfo {
+            rootfs: self.rootfs.clone(),
+            init_pid: self
+                .container
+                .init_pid
+                .ok_or_else(|| anyhow!("Distro is not launched yet, but being exported."))?,
+        };
+        file.write_all(&serde_json::to_vec(&run_info)?)
             .with_context(|| "Failed to write to a distro run info file.")?;
         Ok(())
     }

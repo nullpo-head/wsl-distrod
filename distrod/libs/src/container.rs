@@ -1,9 +1,7 @@
 use anyhow::{bail, Context, Result};
-use nix::fcntl::OFlag;
 use nix::sched::CloneFlags;
 use nix::NixPath;
 use passfd::FdPassingExt;
-use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;
@@ -16,38 +14,41 @@ use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[non_exhaustive]
 pub struct Container {
-    root_fs: PathBuf, // absolute path in the host mount namespaces
-    init_pid: Option<u32>,
+    pub init_pid: Option<u32>,
+    init_procfile: Option<ProcFile>,
 }
 
 impl Container {
-    pub fn new<P: AsRef<Path>>(root_fs: P) -> Result<Self> {
-        Ok(Container {
-            root_fs: fs::canonicalize(root_fs.as_ref())
-                .with_context(|| format!("invalid root_fs path: '{:?}'", root_fs.as_ref()))?,
+    pub fn new() -> Self {
+        Container {
             init_pid: None,
+            init_procfile: None,
+        }
+    }
+
+    pub fn from_pid(pid: u32) -> Result<Self> {
+        let procfile = ProcFile::from_pid(pid)?;
+        if procfile.is_none() {
+            bail!("The given pid does not exist");
+        }
+        Ok(Container {
+            init_pid: Some(pid),
+            init_procfile: procfile,
         })
     }
 
-    /// Export the infromation of this container in JSON format,
-    /// which can be used to restore Container struct
-    pub fn run_info_as_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self)?)
-    }
-
-    /// Get Container struct of an existing container from JSON
-    pub fn get_running_container_from_json(json: &str) -> Result<Option<Container>> {
-        // TODO: liveness check
-        Ok(Some(serde_json::from_str(json)?))
-    }
-
-    pub fn launch<P: AsRef<Path>>(
+    pub fn launch<P1, P2>(
         &mut self,
         init: Option<Vec<String>>,
-        old_root: P,
-    ) -> Result<ProcFile> {
+        rootfs: P1,
+        old_root: P2,
+    ) -> Result<()>
+    where
+        P1: AsRef<Path>,
+        P2: AsRef<Path>,
+    {
         let init = init.unwrap_or_else(|| {
             vec![
                 "/sbin/init".to_owned(),
@@ -66,7 +67,7 @@ impl Container {
                 enter_new_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
                 Ok(())
             });
-            let rootfs = self.root_fs.clone();
+            let new_root = PathBuf::from(rootfs.as_ref());
             let old_root = PathBuf::from(old_root.as_ref());
             unsafe {
                 command.pre_exec(move || {
@@ -77,7 +78,7 @@ impl Container {
                             .send_fd(procfile.as_raw_fd())
                             .with_context(|| "Failed to do send_fd.")?;
                         drop(procfile);
-                        prepare_filesystem(&rootfs, &old_root)
+                        prepare_filesystem(&new_root, &old_root)
                             .with_context(|| "Failed to initialize the container's filesystem.")?;
                         Ok(())
                     };
@@ -102,7 +103,8 @@ impl Container {
                 .pid()
                 .with_context(|| "Failed to get the pid of init.")?,
         );
-        Ok(procfile)
+        self.init_procfile = Some(procfile);
+        Ok(())
     }
 
     pub fn exec_command<I, S, T1, T2, P>(
@@ -134,7 +136,7 @@ impl Container {
             command.current_dir(wd);
         }
         command.pre_second_fork(|| {
-            enter_namespace(self.init_pid.unwrap())
+            enter_namespace(self.init_procfile.as_ref().unwrap())
                 .with_context(|| "Failed to enter the init's namespace")?;
             if let Some(ref cred) = cred {
                 cred.drop_privilege();
@@ -181,18 +183,11 @@ fn daemonize(fds_to_keep: &[i32]) -> Result<()> {
     Ok(())
 }
 
-fn enter_namespace(pid: u32) -> Result<()> {
-    for ns in &["uts", "pid", "mnt"] {
-        let ns_path = format!("/proc/{}/ns/{}", pid, ns);
-        let nsdir_fd = nix::fcntl::open(
-            ns_path.as_str(),
-            OFlag::O_RDONLY,
-            nix::sys::stat::Mode::empty(),
-        )
-        .with_context(|| format!("Failed to open {}", &ns_path))?;
-        nix::sched::setns(nsdir_fd, CloneFlags::empty())
-            .with_context(|| format!("Setns({}) failed.", &ns_path))?;
-        nix::unistd::close(nsdir_fd)?;
+fn enter_namespace(proc: &ProcFile) -> Result<()> {
+    for ns in &["ns/uts", "ns/pid", "ns/mnt"] {
+        let ns_file = proc.open_file_at(ns)?;
+        nix::sched::setns(ns_file.as_raw_fd(), CloneFlags::empty())
+            .with_context(|| format!("Setns({}) failed.", ns))?;
     }
     Ok(())
 }
