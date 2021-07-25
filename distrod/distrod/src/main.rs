@@ -273,8 +273,12 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
         ) as Box<dyn Read>,
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
-            let response = reqwest::blocking::get(&url)
+            let client = reqwest::blocking::Client::builder().timeout(None).build()?;
+            let response = client
+                .get(&url)
+                .send()
                 .with_context(|| format!("Failed to download {}.", &url))?;
+            log::info!("Download done.");
             Box::new(std::io::Cursor::new(response.bytes()?)) as Box<dyn Read>
         }
     };
