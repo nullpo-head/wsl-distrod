@@ -31,8 +31,6 @@ mod shell_hook;
 pub struct Opts {
     #[structopt(short, long)]
     pub log_level: Option<LogLevel>,
-    #[structopt(short, long)]
-    pub call_from_wsl: bool,
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
