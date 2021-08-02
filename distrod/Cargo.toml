@@ -5,4 +5,5 @@ members = [
     "distrod-exec",
     "distrod_wsl_launcher",
     "libs",
+    "portproxy",
 ]

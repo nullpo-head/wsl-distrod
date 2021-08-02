@@ -54,44 +54,32 @@ def make_rootfs(workspace_path: str, output_dst: str):
 def make_distrod_distribution(workspace_path: str, output_dst: str):
     work_dir = output_dst
     make_distrod_distribution_dirs(work_dir)
-    bin_names = ["distrod", "distrod-exec"]
+    bin_names = ["distrod", "distrod-exec", "portproxy"]
     for bin_name in bin_names:
-        bin_path = build(bin_name, workspace_path, work_dir)
-        copy_dependency_libs(bin_name, work_dir)
-        ld_path = get_ld_dir_in_container(os.path.basename(
-            extract_dependency_libs(work_dir + bin_path)[0]))
-        modify_lib_search_path(work_dir + bin_path,
-                               ld_path, get_lib_dir_in_container())
+        make_distrod_project_static_linux(workspace_path, work_dir, bin_name)
+    make_distrod_project_static_windows(workspace_path, work_dir, "portproxy")
     copy_distrod_distribution_resources(work_dir)
     set_permissions(work_dir)
     set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
 
 
-def make_minimum_mountpoints(work_dir: str):
-    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
-    for dir in dirs:
-        os.makedirs(work_dir + dir)
+def make_distrod_project_static_linux(workspace_path, work_dir, bin_name):
+    bin_path = copy_target_binary(bin_name, workspace_path, work_dir)
+    copy_dependency_libs(bin_name, work_dir)
+    ld_path = get_ld_dir_in_container(os.path.basename(
+        extract_dependency_libs(work_dir + bin_path)[0]))
+    modify_lib_search_path(work_dir + bin_path,
+                           ld_path, get_lib_dir_in_container())
 
 
-def make_distrod_distribution_dirs(work_dir: str):
-    dirs = [
-        get_distrod_dir_in_container(),
-        get_distrod_dir_in_container("alias"),
-        get_distrod_dir_in_container("lib"),
-        get_distrod_dir_in_container("ld")]
-    for dir in dirs:
-        os.makedirs(work_dir + dir)
+def make_distrod_project_static_windows(workspace_path, work_dir, bin_name):
+    binpath = copy_target_binary(bin_name + ".exe", workspace_path, work_dir)
+    os.system(f"chmod a+x {work_dir + binpath}")
 
 
-def build(bin_name: str, workspace_path: str, work_dir: str) -> str:
-    dir_to_back = os.getcwd()
-    os.chdir(workspace_path)
-    res = subprocess.run(["cargo", "build", "--release", "-p", bin_name])
-    if res.returncode != 0:
-        raise Exception("cargo build failed")
-    shutil.copy(f"./target/release/{bin_name}",
+def copy_target_binary(bin_name: str, workspace_path: str, work_dir: str) -> str:
+    shutil.copy(f"{workspace_path}/target/release/{bin_name}",
                 work_dir + get_distrod_dir_in_container(bin_name))
-    os.chdir(dir_to_back)
     return get_distrod_dir_in_container(bin_name)
 
 
@@ -133,6 +121,22 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
         raise Exception(f"command failed. {patch_args}")
 
 
+def make_minimum_mountpoints(work_dir: str):
+    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
+    for dir in dirs:
+        os.makedirs(work_dir + dir)
+
+
+def make_distrod_distribution_dirs(work_dir: str):
+    dirs = [
+        get_distrod_dir_in_container(),
+        get_distrod_dir_in_container("alias"),
+        get_distrod_dir_in_container("lib"),
+        get_distrod_dir_in_container("ld")]
+    for dir in dirs:
+        os.makedirs(work_dir + dir)
+
+
 def set_permissions(work_dir: str):
     dir_to_back = os.getcwd()
     os.chdir(work_dir)
@@ -147,18 +151,16 @@ def set_suid(bin_path: str):
 
 
 def copy_distrod_distribution_resources(work_dir: str):
-    shutil.copy(get_resources_dir("distrod.toml"),
-                work_dir + get_distrod_dir_in_container())
-    os.system(
-        f"sudo chown root:root {work_dir + get_distrod_dir_in_container('distrod.toml')}")
+    shutil.copytree(get_resources_dir(), work_dir +
+                    get_distrod_dir_in_container(), dirs_exist_ok=True)
 
 
 def compress_entire_tree(tree: str, output_path: str):
     dir_to_back = os.getcwd()
     os.chdir(tree)
     os.system("sudo tar czf compressed.tar.gz *")
-    #shutil.copy(tree + "/distrod_root.tar.gz", output_path)
     shutil.copy(tree + "/compressed.tar.gz", output_path)
+    os.chdir(dir_to_back)
 
 
 def make_dir_deletable(tree: str):

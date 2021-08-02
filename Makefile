@@ -6,7 +6,10 @@ build: distrod-release
 rootfs:
 	./distrod_packer/distrod_packer ./distrod "$(OUTPUT_ROOTFS_PATH)"
 
-distrod-release:
+distrod-release: distrod-bins distrod/target/release/portproxy.exe
 	./distrod_packer/distrod_packer -r ./distrod opt_distrod.tar.gz
 
-.PHONY: build rootfs distrod-release 
+distrod-bins:
+	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
+
+.PHONY: build rootfs distrod-release distrod-bins

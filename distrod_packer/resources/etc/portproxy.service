@@ -1,0 +1,13 @@
+[Unit]
+Description=A Distrod service that allows you to expose the TCP port you are listening on in WSL to the outside of WSL.
+After=network-online.target
+Wants=network-online.target systemd-networkd-wait-online.service
+
+[Service]
+Restart=on-failure
+Environment="TCP4_PORTS=22 80"
+
+ExecStart=/bin/sh -c '/opt/distrod/portproxy.exe proxy $(/opt/distrod/portproxy show ipv4) -t $TCP4_PORTS'
+
+[Install]
+WantedBy=multi-user.target

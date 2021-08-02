@@ -15,4 +15,7 @@ distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz: $(ROOTFS_PATH)
 distrod_wsl_launcher: distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
 	cd distrod; cargo build --release -p distrod_wsl_launcher
 
-.PHONY: build distro_launcher distrod_wsl_launcher
+portproxy:
+	cd distrod; cargo build --release -p portproxy
+
+.PHONY: build distro_launcher distrod_wsl_launcher portproxy

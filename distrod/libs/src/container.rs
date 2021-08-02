@@ -1,11 +1,17 @@
+#![feature(slice_strip)]
+
 use anyhow::{bail, Context, Result};
 use nix::sched::CloneFlags;
+use nix::unistd::{chown, Gid, Uid};
 use nix::NixPath;
 use passfd::FdPassingExt;
-use std::ffi::OsStr;
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
+use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::os::unix::prelude::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -41,7 +47,7 @@ impl Container {
 
     pub fn launch<P1, P2>(
         &mut self,
-        init: Option<Vec<String>>,
+        init: Option<Vec<OsString>>,
         rootfs: P1,
         old_root: P2,
     ) -> Result<()>
@@ -51,8 +57,8 @@ impl Container {
     {
         let init = init.unwrap_or_else(|| {
             vec![
-                "/sbin/init".to_owned(),
-                "--unit=multi-user.target".to_owned(),
+                OsString::from("/sbin/init"),
+                OsString::from("--unit=multi-user.target"),
             ]
         });
 
@@ -206,11 +212,13 @@ where
 {
     if new_root.as_ref() == Path::new("/") {
         prepare_host_base_root(old_root.as_ref())?;
+        mount_kernelcmdline()?;
     } else {
         prepare_minimum_root(new_root.as_ref(), old_root.as_ref())?;
         let mount_entries =
             get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
         mount_wsl_mountpoints(old_root.as_ref(), &mount_entries)?;
+        mount_kernelcmdline()?;
         umount_host_mountpoints(old_root.as_ref(), &mount_entries)?;
     }
     Ok(())
@@ -413,6 +421,73 @@ fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Res
         }
     }
     Ok(())
+}
+
+/// Overwrite the kernel cmdline with one for the container.
+fn mount_kernelcmdline() -> Result<()> {
+    let new_cmdline_path = "/run/distrod-cmdline";
+    let mut new_cmdline = File::create(new_cmdline_path)
+        .with_context(|| format!("Failed to create '{}'.", new_cmdline_path))?;
+    chown(
+        new_cmdline_path,
+        Some(Uid::from_raw(0)),
+        Some(Gid::from_raw(0)),
+    )
+    .with_context(|| format!("Failed to chown '{}'", new_cmdline_path))?;
+
+    let mut cmdline_cont =
+        std::fs::read("/proc/cmdline").with_context(|| "Failed to read /proc/cmdline.")?;
+    if cmdline_cont.ends_with("\n".as_bytes()) {
+        cmdline_cont.truncate(cmdline_cont.len() - 1);
+    }
+
+    // Set default environment vairables for the systemd services.
+    for setenv in to_systemd_setenv_args(&collect_wsl_env_vars()) {
+        cmdline_cont.extend(" ".as_bytes());
+        cmdline_cont.extend(setenv.as_bytes());
+    }
+    cmdline_cont.extend("\n".as_bytes());
+
+    new_cmdline
+        .write_all(&cmdline_cont)
+        .with_context(|| "Failed to write the new cmdline.")?;
+
+    nix::mount::mount::<Path, Path, Path, Path>(
+        Some(new_cmdline_path.as_ref()),
+        "/proc/cmdline".as_ref(),
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+    )
+    .with_context(|| "Failed to do bind mount at the cmdline.")?;
+    Ok(())
+}
+
+fn to_systemd_setenv_args<S1, S2>(env: &[(S1, S2)]) -> Vec<OsString>
+where
+    S1: AsRef<OsStr>,
+    S2: AsRef<OsStr>,
+{
+    let mut args = vec![];
+    for (name, value) in env {
+        let mut arg = OsString::from("systemd.setenv=");
+        arg.push(name.as_ref());
+        arg.push("=");
+        arg.push(value.as_ref());
+        args.push(arg);
+    }
+    args
+}
+
+fn collect_wsl_env_vars() -> Vec<(OsString, OsString)> {
+    let mut wsl_env_vars = HashSet::new();
+    wsl_env_vars.insert(OsString::from("WSLENV"));
+    wsl_env_vars.insert(OsString::from("WSL_DISTRO_NAME"));
+    wsl_env_vars.insert(OsString::from("WSL_INTEROP"));
+
+    std::env::vars_os()
+        .filter(|(name, _)| wsl_env_vars.contains(name))
+        .collect()
 }
 
 #[allow(clippy::unnecessary_wraps)]

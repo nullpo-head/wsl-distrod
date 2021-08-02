@@ -154,6 +154,13 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
     }
 
+    // Make symlinks to Distrod's utility services
+    let link = path.as_ref().join("etc/systemd/system/portproxy.service");
+    if !link.exists() {
+        std::os::unix::fs::symlink("/opt/distrod/etc/portproxy.service", link)
+            .with_context(|| "Failed to make a symlink to portproxy.service.")?;
+    }
+
     // echo hostname to /etc/hostname
     let hostname_path = path.as_ref().join("etc/hostname");
     let mut hostname_buf = vec![0; 64];
