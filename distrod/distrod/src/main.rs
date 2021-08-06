@@ -7,7 +7,7 @@ use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{stdin, Read, Write};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::str::FromStr;
@@ -23,8 +23,11 @@ use libs::distro_image::{
 use libs::lxd_image::LxdDistroImageList;
 use libs::passwd::IdCredential;
 use libs::passwd::{self, Credential};
+use libs::wsl_interop;
 
+mod autostart;
 mod shell_hook;
+mod template;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -105,6 +108,8 @@ pub struct CreateOpts {
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab")]
 pub struct EnableOpts {
+    #[structopt(short, long)]
+    start_on_windows_boot: bool,
     #[structopt(short, long)]
     do_full_initialization: bool,
 }
@@ -233,13 +238,30 @@ fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
     distro::initialize_distro_rootfs("/", opts.do_full_initialization)
         .with_context(|| "Failed to initialize the rootfs.")?;
     log::info!("Distrod has been enabled. Now your shell will start under systemd.");
+    if opts.start_on_windows_boot {
+        log::info!(
+            "Enabling atuomatic startup of Distrod. UAC dialog will appear because scheduling\n\
+             a task requires the admin privilege. Please hit enter to proceed."
+        );
+        let mut buf = String::new();
+        let _ = stdin().read_line(&mut buf);
+        autostart::enable_autostart_on_windows_boot(
+            &wsl_interop::get_distro_name().with_context(|| "Failed to get the distro name.")?,
+        )
+        .with_context(|| "Failed to enable the autostart on Windows boot.")?;
+        log::info!("Now Distrod has been launched on Windows boot.");
+    }
     Ok(())
 }
 
 fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
     shell_hook::disable_default_shell_hook()
         .with_context(|| "Failed to disable the hook to the default shell.")?;
-    log::info!("Distrod has been disabled. Now systemd won't start automatically.");
+    log::info!("Distrod has been disabled. Now systemd will not start automatically.");
+    autostart::disable_autostart_on_windows_boot(
+        &wsl_interop::get_distro_name().with_context(|| "Failed to get the distro name.")?,
+    )
+    .with_context(|| "Failed to disable the autostart on Windows boot.")?;
     Ok(())
 }
 

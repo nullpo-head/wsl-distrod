@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 pub struct MountEntry {
+    pub source: String,
     pub path: PathBuf,
     pub fstype: String,
 }
@@ -19,8 +20,9 @@ pub fn get_mount_entries() -> Result<Vec<MountEntry>> {
     for (_, line) in reader.lines().enumerate() {
         let line = line?;
         let row: Vec<&str> = line.split(' ').take(3).collect();
-        let (path, fstype) = (row[1].to_owned(), row[2].to_owned());
+        let (source, path, fstype) = (row[0].to_owned(), row[1].to_owned(), row[2].to_owned());
         mount_entries.push(MountEntry {
+            source,
             path: PathBuf::from(path),
             fstype,
         });

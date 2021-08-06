@@ -1,11 +1,8 @@
-#![feature(slice_strip)]
-
 use anyhow::{bail, Context, Result};
 use nix::sched::CloneFlags;
 use nix::unistd::{chown, Gid, Uid};
 use nix::NixPath;
 use passfd::FdPassingExt;
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Write;
@@ -19,6 +16,7 @@ use crate::mount_info::{get_mount_entries, MountEntry};
 use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
+use crate::wsl_interop::collect_wsl_env_vars;
 
 #[non_exhaustive]
 pub struct Container {
@@ -212,13 +210,13 @@ where
 {
     if new_root.as_ref() == Path::new("/") {
         prepare_host_base_root(old_root.as_ref())?;
-        mount_kernelcmdline()?;
+        mount_kernelcmdline().with_context(|| "Failed to overwrite the kernel commandline.")?;
     } else {
         prepare_minimum_root(new_root.as_ref(), old_root.as_ref())?;
         let mount_entries =
             get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
         mount_wsl_mountpoints(old_root.as_ref(), &mount_entries)?;
-        mount_kernelcmdline()?;
+        mount_kernelcmdline().with_context(|| "Failed to overwrite the kernel commandline.")?;
         umount_host_mountpoints(old_root.as_ref(), &mount_entries)?;
     }
     Ok(())
@@ -442,7 +440,11 @@ fn mount_kernelcmdline() -> Result<()> {
     }
 
     // Set default environment vairables for the systemd services.
-    for setenv in to_systemd_setenv_args(&collect_wsl_env_vars()) {
+    for setenv in to_systemd_setenv_args(
+        collect_wsl_env_vars()
+            .with_context(|| "Failed to collect WSL envs.")?
+            .into_iter(),
+    ) {
         cmdline_cont.extend(" ".as_bytes());
         cmdline_cont.extend(setenv.as_bytes());
     }
@@ -463,31 +465,19 @@ fn mount_kernelcmdline() -> Result<()> {
     Ok(())
 }
 
-fn to_systemd_setenv_args<S1, S2>(env: &[(S1, S2)]) -> Vec<OsString>
+fn to_systemd_setenv_args<I>(env: I) -> Vec<OsString>
 where
-    S1: AsRef<OsStr>,
-    S2: AsRef<OsStr>,
+    I: Iterator<Item = (OsString, OsString)>,
 {
     let mut args = vec![];
     for (name, value) in env {
         let mut arg = OsString::from("systemd.setenv=");
-        arg.push(name.as_ref());
+        arg.push(name);
         arg.push("=");
-        arg.push(value.as_ref());
+        arg.push(value);
         args.push(arg);
     }
     args
-}
-
-fn collect_wsl_env_vars() -> Vec<(OsString, OsString)> {
-    let mut wsl_env_vars = HashSet::new();
-    wsl_env_vars.insert(OsString::from("WSLENV"));
-    wsl_env_vars.insert(OsString::from("WSL_DISTRO_NAME"));
-    wsl_env_vars.insert(OsString::from("WSL_INTEROP"));
-
-    std::env::vars_os()
-        .filter(|(name, _)| wsl_env_vars.contains(name))
-        .collect()
 }
 
 #[allow(clippy::unnecessary_wraps)]

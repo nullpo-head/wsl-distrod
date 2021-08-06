@@ -22,3 +22,5 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 chrono = "0.4"
 xz2 = "0.1"
 tar = "0.4"
+tempfile = "3.0"
+regex = "1.0"
