@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
-use tokio::io::{self, BufReader};
 use tokio::io::AsyncWriteExt;
+use tokio::io::{self, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Debug, StructOpt)]
@@ -89,6 +89,9 @@ fn run_show(_opts: ShowOpts) -> Result<()> {
 async fn run_proxy(opts: ProxyOpts) {
     let mut handles = vec![];
     for tcp_port in opts.tcp4 {
+        if tcp_port == 0 {
+            continue;
+        }
         let dest_addr = format!("{}:{}", &opts.dest_addr, tcp_port);
         handles.push(tokio::spawn(async move {
             if let Err(e) = proxy_tcp_port(tcp_port, dest_addr).await {
@@ -106,7 +109,7 @@ async fn proxy_tcp_port(port: u16, dest_addr: String) -> Result<()> {
     let listener = TcpListener::bind(&listen_addr)
         .await
         .with_context(|| format!("Failed to bind {}.", &listen_addr))?;
-    println!("Listening on {}", &listen_addr);
+    println!("Forwarding {} to {}", &listen_addr, &dest_addr);
     loop {
         let (stream, _) = listener
             .accept()

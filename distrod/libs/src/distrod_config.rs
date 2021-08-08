@@ -22,7 +22,7 @@ pub struct DistrodGlobalConfig {
     pub distro_images_dir: PathBuf,
 }
 
-static DISTROD_CONFIG_ROOT_DIR: &str = "/opt/distrod";
+static DISTROD_ROOT_DIR: &str = "/opt/distrod";
 
 static DISTROD_CONFIG: Lazy<Result<RwLock<Arc<DistrodConfig>>>> = Lazy::new(|| {
     Ok(RwLock::new(Arc::new(read_distrod_config().with_context(
@@ -60,30 +60,49 @@ impl DistrodConfig {
     }
 }
 
-static DISTROD_ALIAS_DIR: Lazy<String> =
-    Lazy::new(|| format!("{}/{}", DISTROD_CONFIG_ROOT_DIR, "alias"));
+static DISTROD_ALIAS_DIR: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "alias"));
 
+/// The directory where the alias commands are stored.
 pub fn get_alias_dir() -> &'static str {
     DISTROD_ALIAS_DIR.as_str()
 }
 
-static DISTROD_BIN_PATH: Lazy<String> =
-    Lazy::new(|| format!("{}/{}", DISTROD_CONFIG_ROOT_DIR, "distrod"));
+static DISTROD_BIN_PATH: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "distrod"));
 
+/// The path to the distrod binary.
 pub fn get_distrod_bin_path() -> &'static str {
     DISTROD_BIN_PATH.as_str()
 }
 
 static DISTROD_EXEC_BIN_PATH: Lazy<String> =
-    Lazy::new(|| format!("{}/{}", DISTROD_CONFIG_ROOT_DIR, "distrod-exec"));
+    Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "distrod-exec"));
 
+/// The path to the distrod-exec binary.
 pub fn get_distrod_exec_bin_path() -> &'static str {
     DISTROD_EXEC_BIN_PATH.as_str()
 }
 
+static DISTROD_ETC_DIR_PAH: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "etc"));
+
+/// The path to the directory where the systemd services are stored.
+pub fn get_distrod_systemd_service_dir() -> &'static str {
+    DISTROD_ETC_DIR_PAH.as_str()
+}
+
+static DISTROD_CONF_DIR_PAH: Lazy<String> =
+    Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "conf"));
+
+/// The path to the directory where the configuration files are stored.
+/// Configurations files are modified by users. Thus, the files stroed
+/// in this directory should not be overwritten by the update and should be
+/// backwork-compatible.
+pub fn get_distrod_conf_dir() -> &'static str {
+    DISTROD_CONF_DIR_PAH.as_str()
+}
+
 #[cfg(target_os = "linux")]
 fn read_distrod_config() -> Result<DistrodConfig> {
-    let config_path = Path::new(DISTROD_CONFIG_ROOT_DIR).join("distrod.toml");
+    let config_path = Path::new(&*DISTROD_CONF_DIR_PAH).join("distrod.toml");
     let mut config_file = File::open(&config_path).with_context(|| {
         format!(
             "Failed to open the distrod config file: '{:?}'.",
@@ -115,7 +134,7 @@ fn read_distrod_config() -> Result<DistrodConfig> {
 }
 
 fn write_distrod_config(config: &DistrodConfig) -> Result<()> {
-    let config_path = Path::new(DISTROD_CONFIG_ROOT_DIR).join("distrod.toml");
+    let config_path = Path::new(&*DISTROD_CONF_DIR_PAH).join("distrod.toml");
     let mut config_file = BufWriter::new(File::create(&config_path).with_context(|| {
         format!(
             "Failed to open the distrod config file: '{:?}'.",

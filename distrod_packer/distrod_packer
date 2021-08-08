@@ -122,7 +122,7 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
 
 
 def make_minimum_mountpoints(work_dir: str):
-    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
+    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc", "/conf"]
     for dir in dirs:
         os.makedirs(work_dir + dir)
 
