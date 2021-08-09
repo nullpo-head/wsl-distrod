@@ -1,0 +1,187 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish-release_assets:
+    name: Publish the release assets
+    runs-on: ${{ matrix.os }}
+
+    needs: [build-distrod_wsl_launcher]
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Get the arch name
+        shell: bash
+        run: |
+          echo "ARCH_NAME=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Download opt_distrod
+        uses: actions/download-artifact@v2
+        with:
+          name: "opt_distrod-${{ env.ARCH_NAME }}"
+          path: assets
+
+      - name: Download distrod_wsl_launcher
+        uses: actions/download-artifact@v2
+        with:
+          name: "distrod_wsl_launcher-${{ env.ARCH_NAME }}"
+          path: assets
+
+      - name: Read the commit message and use it as a body of the new release
+        shell: bash
+        run: |
+          release="$(git log $(echo ${{ github.ref }} | grep -o 'v.*') -1 --pretty=format:%B)"  # Use the commit message as the release message
+          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
+          echo "$release" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Upload Binaries to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: assets/*
+          file_glob: true
+          tag: ${{ github.ref }}
+          overwrite: true
+          body: |
+            ${{ env.RELEASE_BODY }}
+
+  build-distrod_wsl_launcher:
+    name: Build Distrod WSL launcher
+    runs-on: ${{ matrix.os }}
+
+    needs: [build-distrod-command]
+
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            distrod/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Get the arch name
+        shell: bash
+        run: |
+          echo "ARCH_NAME=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Download opt_distrod
+        uses: actions/download-artifact@v2
+        with:
+          name: "opt_distrod-${{ env.ARCH_NAME }}"
+          path: rootfs
+
+      - name: Build
+        run: make -f windows.mk ROOTFS_PATH=rootfs/opt_distrod.tar.gz distrod_wsl_launcher
+
+      - name: Upload for the assets
+        uses: actions/upload-artifact@v2
+        with:
+          name: "distrod_wsl_launcher-${{ env.ARCH_NAME }}"
+          path: distrod/target/release/distrod_wsl_launcher.exe
+          if-no-files-found: error
+
+  build-distrod-command:
+    name: Build distrod Linux command
+    runs-on: ${{ matrix.os }}
+
+    needs: [build-portproxy-exe]
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            distrod/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Get the arch name
+        shell: bash
+        run: |
+          echo "ARCH_NAME=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Download portproxy.exe
+        uses: actions/download-artifact@v2
+        with:
+          name: "portproxy-${{ env.ARCH_NAME }}"
+          path: distrod/target/release
+
+      - name: Install patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+
+      - name: Build
+        run: make distrod-release
+
+      - name: Upload opt_distrod.tar.gz for the Windows build and the assets
+        uses: actions/upload-artifact@v2
+        with:
+          name: "opt_distrod-${{ env.ARCH_NAME }}"
+          path: opt_distrod.tar.gz
+          if-no-files-found: error
+
+  build-portproxy-exe:
+    name: Build portproxy.exe
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            distrod/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Get the arch name
+        shell: bash
+        run: |
+          echo "ARCH_NAME=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Build
+        run: make -f windows.mk portproxy.exe
+
+      - name: Upload portproxy.exe for the Linux build
+        uses: actions/upload-artifact@v2
+        with:
+          name: "portproxy-${{ env.ARCH_NAME }}"
+          path: distrod/target/release/portproxy.exe
+          if-no-files-found: error
