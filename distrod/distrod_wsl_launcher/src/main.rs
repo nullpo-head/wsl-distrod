@@ -8,7 +8,7 @@ use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, Distro
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -174,6 +174,7 @@ fn config_distro(distro_name: &str, opts: ConfigOpts) -> Result<()> {
         wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
             .with_context(|| "Failed to set the default user")?;
     }
+    log::info!("Configuration done.");
 
     Ok(())
 }
@@ -328,10 +329,12 @@ fn register_distribution<P: AsRef<Path>>(
     distro_name: &str,
     tar_gz_filename: P,
 ) -> Result<()> {
-    if distro_name == DISTRO_NAME {
+    // Install the distro by WSL API only when this app is a Windows Store app and --distro-name is not given.
+    if distro_name == DISTRO_NAME && is_windows_store_app() {
         wsl.register_distribution(distro_name, tar_gz_filename)
             .with_context(|| "Failed to register the distribution.")
     } else {
+        // Otherwise, use wsl.exe --import to install the distro for flexibility.
         let mut cmd = Command::new("cmd.exe");
         cmd.arg("/C")
             .arg("wsl")
@@ -360,6 +363,17 @@ fn register_distribution<P: AsRef<Path>>(
         );
         Ok(())
     }
+}
+
+fn is_windows_store_app() -> bool {
+    let inner = || -> Result<bool> {
+        let mut self_path =
+            std::env::current_exe().with_context(|| "Failed to get the current exe path.")?;
+        self_path.pop();
+        let self_dir = self_path.file_name().unwrap_or_else(|| OsStr::new(""));
+        Ok(self_dir == "WindowsApps")
+    };
+    inner().unwrap_or(false)
 }
 
 fn add_user(
