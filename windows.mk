@@ -1,5 +1,5 @@
-ROOTFS_PATH := distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
-OUTPUT_PORT_PROXY_EXE_PATH := distrod/target/release/portproxy.exe
+ROOTFS_PATH ?= distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
+OUTPUT_PORT_PROXY_EXE_PATH ?= distrod/target/release/portproxy.exe
 
 build: distro_launcher/x64/distrod_wsl_launcher.exe
 
