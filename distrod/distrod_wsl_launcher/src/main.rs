@@ -11,7 +11,8 @@ use libs::lxd_image::LxdDistroImageList;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
@@ -208,7 +209,7 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
     log::info!("Installing the rootfs...");
-    wsl.register_distribution(distro_name, &install_targz_path)
+    register_distribution(&wsl, distro_name, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
 
@@ -320,6 +321,45 @@ where
             .with_context(|| format!("Failed to add an entry to an archive. {:?}", path))?;
     }
     Ok(())
+}
+
+fn register_distribution<P: AsRef<Path>>(
+    wsl: &wslapi::Library,
+    distro_name: &str,
+    tar_gz_filename: P,
+) -> Result<()> {
+    if distro_name == DISTRO_NAME {
+        wsl.register_distribution(distro_name, tar_gz_filename)
+            .with_context(|| "Failed to register the distribution.")
+    } else {
+        let mut cmd = Command::new("cmd.exe");
+        cmd.arg("/C")
+            .arg("wsl")
+            .arg("--import")
+            .arg(distro_name)
+            .arg(format!("%LocalAppData%\\{}", distro_name))
+            .arg(tar_gz_filename.as_ref());
+        let mut child = cmd
+            .spawn()
+            .with_context(|| "Failed to launch wsl.exe command.")?;
+        let status = child
+            .wait()
+            .with_context(|| "Failed to wait for wsl.exe command.")?;
+        if !status.success() {
+            bail!(
+                "Failed: cmd.exe /C wsl --import {} {} {:#?}",
+                distro_name,
+                format!("%LocalAppData%\\{}", distro_name),
+                tar_gz_filename.as_ref()
+            );
+        }
+        log::info!(
+            "{} is installed in %LocalAppData%\\{}",
+            distro_name,
+            distro_name
+        );
+        Ok(())
+    }
 }
 
 fn add_user(
