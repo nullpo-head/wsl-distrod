@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ci-test]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci-on-linux:
+    name: CI on Linux
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./distrod
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --verbose -p libs -p portproxy -p distrod-exec -p distrod
+      - name: Run tests
+        run: cargo test --verbose -p libs -p portproxy -p distrod-exec -p distrod
+
+  ci-on-windows:
+    name: CI on Windows
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    defaults:
+      run:
+        working-directory: ./distrod
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --verbose -p libs -p portproxy -p distrod_wsl_launcher
+      - name: Run tests
+        run: cargo test --verbose -p libs -p portproxy -p distrod_wsl_launcher
