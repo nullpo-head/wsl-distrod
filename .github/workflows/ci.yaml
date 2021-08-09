@@ -18,11 +18,6 @@ jobs:
       matrix:
         os: [ubuntu-latest]
 
-    defaults:
-      run:
-        shell: bash
-        working-directory: ./distrod
-
     steps:
       - uses: actions/checkout@v2
       - uses: actions/cache@v2
@@ -31,12 +26,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/distrod/Cargo.lock') }}
 
-      - name: Build
-        run: cargo build --verbose -p libs -p portproxy -p distrod-exec -p distrod
       - name: Run tests
-        run: cargo test --verbose -p libs -p portproxy -p distrod-exec -p distrod
+        run: make test-linux
 
   ci-on-windows:
     name: CI on Windows
@@ -48,7 +41,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./distrod
+        shell: bash
 
     steps:
       - uses: actions/checkout@v2
@@ -58,12 +51,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('distrod/distrod/Cargo.lock') }}
 
-      - name: Build
-        run: |
-          touch distrod_wsl_launcher/resources/distrod_root.tar.gz  # dummy file
-          cargo build --verbose -p libs -p portproxy -p distrod_wsl_launcher
-        shell: bash
       - name: Run tests
-        run: cargo test --verbose -p libs -p portproxy -p distrod_wsl_launcher
+        run: |
+          touch distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz  # dummy file
+          make -f windows.mk test-win

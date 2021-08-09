@@ -23,4 +23,7 @@ portproxy.exe:
 		cp target/release/port_proxy.exe $(OUTPUT_PORT_PROXY_EXE_PATH); \
 	fi
 
-.PHONY: build distro_launcher distrod_wsl_launcher portproxy.exe
+test-win: distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
+	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod_wsl_launcher
+
+.PHONY: build distro_launcher distrod_wsl_launcher portproxy.exe test
