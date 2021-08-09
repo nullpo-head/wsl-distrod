@@ -15,4 +15,9 @@ distrod-bins:
 lint:
 	shellcheck install.sh
 
+ifneq ($(shell uname -a | grep microsoft),)  # This is a WSL environment, which means you can run .exe
+distrod_wsl_launcher: distrod-release
+include windows.mk
+endif
+
 .PHONY: build rootfs distrod-release distrod-bins lint
