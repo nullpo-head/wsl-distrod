@@ -12,4 +12,7 @@ distrod-release: distrod-bins distrod/target/release/portproxy.exe
 distrod-bins:
 	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
 
-.PHONY: build rootfs distrod-release distrod-bins
+lint:
+	shellcheck install.sh
+
+.PHONY: build rootfs distrod-release distrod-bins lint
