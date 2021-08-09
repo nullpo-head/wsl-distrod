@@ -1,5 +1,4 @@
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use colored::*;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -9,6 +8,7 @@ use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, Distro
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
@@ -27,6 +27,8 @@ static DISTRO_NAME: &str = "Distrod";
 pub struct Opts {
     #[structopt(short, long)]
     pub log_level: Option<LogLevel>,
+    #[structopt(short, long)]
+    pub distro_name: Option<String>,
     #[structopt(subcommand)]
     pub command: Option<Subcommand>,
 }
@@ -54,6 +56,8 @@ pub enum Subcommand {
 pub struct InstallOpts {
     #[structopt(long)]
     root: bool,
+    #[structopt(short, long)]
+    distro_name: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -66,7 +70,7 @@ pub struct RunOpts {
 #[structopt(rename_all = "kebab")]
 pub struct ConfigOpts {
     #[structopt(long)]
-    default_user: String,
+    default_user: Option<String>,
 }
 
 fn main() {
@@ -112,16 +116,68 @@ fn init_logger(log_level: &Option<LogLevel>) {
 }
 
 fn run(opts: Opts) -> Result<()> {
+    let distro_name = opts.distro_name.unwrap_or_else(|| DISTRO_NAME.to_owned());
     match opts.command {
-        None | Some(Subcommand::Install(_)) => {
-            install_distro(opts)?;
+        None => {
+            let run_opts = RunOpts { cmd: vec![] };
+            run_distro(&distro_name, run_opts)?;
         }
-        _ => {}
+        Some(Subcommand::Run(run_opts)) => {
+            run_distro(&distro_name, run_opts)?;
+        }
+        Some(Subcommand::Install(install_opts)) => {
+            install_distro(&distro_name, install_opts)?;
+        }
+        Some(Subcommand::Config(config_opts)) => {
+            config_distro(&distro_name, config_opts)?;
+        }
     }
     Ok(())
 }
 
-fn install_distro(_opts: Opts) -> Result<()> {
+fn run_distro(distro_name: &str, opts: RunOpts) -> Result<()> {
+    let wsl = WslApi::new()
+        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
+
+    if !wsl.is_distribution_registered(distro_name) {
+        let install_opts = InstallOpts {
+            root: false,
+            distro_name: None,
+        };
+        return install_distro(distro_name, install_opts);
+    }
+
+    let command = construct_cmd_str(opts.cmd);
+    wsl.launch_interactive(distro_name, command, true)
+        .with_context(|| "Failed to execute command by launch interactive.")?;
+    Ok(())
+}
+
+fn construct_cmd_str(cmd: Vec<String>) -> OsString {
+    OsString::from(
+        cmd.into_iter()
+            .map(|arg| arg.replace("\\", "\\\\").replace(" ", "\\ "))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn config_distro(distro_name: &str, opts: ConfigOpts) -> Result<()> {
+    let wsl = WslApi::new()
+        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
+
+    if let Some(ref default_user) = opts.default_user {
+        let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
+        let uid = query_uid(&wsl, distro_name, default_user.as_str(), tmp_dir)
+            .with_context(|| format!("Failed to get the uid of {}.", default_user))?;
+        wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
+            .with_context(|| "Failed to set the default user")?;
+    }
+
+    Ok(())
+}
+
+fn install_distro(distro_name: &str, opts: InstallOpts) -> Result<()> {
     let wsl = WslApi::new()
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
 
@@ -152,31 +208,36 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
     log::info!("Installing the rootfs...");
-    wsl.register_distribution(DISTRO_NAME, &install_targz_path)
+    wsl.register_distribution(distro_name, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
 
-    let user_name = prompt_string("Please input the new Linux user name. This doesn't have to be the same as your Windows user name.", "user name", None)?;
-    let uid = add_user(&wsl, &user_name, tmp_dir);
-    if uid.is_err() {
-        log::warn!(
-            "Adding user failed, but you can try adding a new user as the root after installation."
-        );
-    }
+    let uid = if !opts.root {
+        let user_name = prompt_string("Please input the new Linux user name. This doesn't have to be the same as your Windows user name.", "user name", None)?;
+        let uid = add_user(&wsl, distro_name, &user_name, tmp_dir);
+        if uid.is_err() {
+            log::warn!(
+                "Adding a user failed, but you can try adding a new user as the root after installation."
+            );
+        }
+        uid.unwrap_or(0)
+    } else {
+        0
+    };
 
     wsl.launch_interactive(
-        DISTRO_NAME,
+        distro_name,
         format!("{} enable -d", distrod_config::get_distrod_bin_path()),
         true,
     )
     .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
-    if let Ok(uid) = uid {
+    log::info!("Installation of Distrod has completed.");
+    if uid != 0 {
         // This should be done after enable, because this changes the default user from root.
-        wsl.configure_distribution(DISTRO_NAME, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
+        wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
             .with_context(|| "Failed to configure the default uid of the distribution.")?;
     }
-    log::info!("Installation of Distrod has completed.");
-    wsl.launch_interactive(DISTRO_NAME, "", true)
+    wsl.launch_interactive(distro_name, "", true)
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     Ok(())
 }
@@ -261,20 +322,34 @@ where
     Ok(())
 }
 
-fn add_user(wsl: &wslapi::Library, user_name: &str, tmp_dir: TempDir) -> Result<u32> {
+fn add_user(
+    wsl: &wslapi::Library,
+    distro_name: &str,
+    user_name: &str,
+    tmp_dir: TempDir,
+) -> Result<u32> {
     wsl.launch_interactive(
-        DISTRO_NAME,
+        distro_name,
         format!(
             "( ( which adduser > /dev/null 2>&1 && adduser {} ) || ( useradd -m '{}' && while ! passwd {}; do : ; done  ) ) && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
             user_name, user_name, user_name, user_name
         ),
         true,
     )?;
+    query_uid(wsl, distro_name, user_name, tmp_dir)
+}
+
+fn query_uid(
+    wsl: &wslapi::Library,
+    distro_name: &str,
+    user_name: &str,
+    tmp_dir: TempDir,
+) -> Result<u32> {
     let uid_path = tmp_dir.path().join("uid");
     let uid_file = File::create(&uid_path).with_context(|| "Failed to create a temp file.")?;
     let status = wsl
         .launch(
-            DISTRO_NAME,
+            distro_name,
             format!("id -u {}", &user_name),
             true,
             wslapi::Stdio::null(),
@@ -282,7 +357,10 @@ fn add_user(wsl: &wslapi::Library, user_name: &str, tmp_dir: TempDir) -> Result<
             wslapi::Stdio::null(),
         )
         .with_context(|| "Failed to launch id command.")?
-        .wait();
+        .wait()?;
+    if !status.success() {
+        bail!("'id -u' failed.");
+    }
     let uid_string = std::fs::read_to_string(&uid_path)
         .with_context(|| "Failed to read the contents of id file.")?;
     let uid_u32 = uid_string.trim().parse::<u32>().with_context(|| {
