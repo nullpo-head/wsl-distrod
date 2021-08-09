@@ -1,4 +1,5 @@
 ROOTFS_PATH := distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
+OUTPUT_PORT_PROXY_EXE_PATH := distrod/target/release/portproxy.exe
 
 build: distro_launcher/x64/distrod_wsl_launcher.exe
 
@@ -18,5 +19,8 @@ distrod_wsl_launcher: distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
 distrod/target/release/portproxy.exe: portproxy.exe
 portproxy.exe:
 	cd distrod; cargo.exe build --release -p portproxy
+	if [ "$$(realpath "$(OUTPUT_PORT_PROXY_EXE_PATH)" )" != "$$(realpath ./distrod/target/release/portproxy.exe)" ]; then \
+		cp target/release/port_proxy.exe $(OUTPUT_PORT_PROXY_EXE_PATH); \
+	fi
 
 .PHONY: build distro_launcher distrod_wsl_launcher portproxy.exe
