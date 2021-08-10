@@ -209,7 +209,7 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
     let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
-    log::info!("Installing the rootfs...");
+    log::info!("Now Windows is installing the new distribution. This may take a while...");
     register_distribution(&wsl, distro_name, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
@@ -227,6 +227,7 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
         0
     };
 
+    log::info!("Initializing the new Distrod distribution. This may take a while...");
     wsl.launch_interactive(
         distro_name,
         format!("{} enable -d", distrod_config::get_distrod_bin_path()),
