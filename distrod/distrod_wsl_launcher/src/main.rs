@@ -1,21 +1,18 @@
 use anyhow::{bail, Context, Result};
-use colored::*;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use libs::cli_ui::prompt_string;
-use libs::cli_ui::{self};
+use libs::cli_ui::{self, LogLevel};
+use libs::cli_ui::{init_logger, prompt_string};
 use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
+use std::io::{self, BufReader, BufWriter, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::str::FromStr;
 use structopt::StructOpt;
-use strum::{EnumString, EnumVariantNames};
 use tempfile::tempdir;
 use tempfile::TempDir;
 use wslapi::Library as WslApi;
@@ -32,17 +29,6 @@ pub struct Opts {
     pub distro_name: Option<String>,
     #[structopt(subcommand)]
     pub command: Option<Subcommand>,
-}
-
-#[derive(Copy, Clone, Debug, EnumString, EnumVariantNames)]
-#[strum(serialize_all = "kebab-case")]
-pub enum LogLevel {
-    Off,
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
 }
 
 #[derive(Debug, StructOpt)]
@@ -76,44 +62,16 @@ pub struct ConfigOpts {
 
 fn main() {
     let opts = Opts::from_args();
-    init_logger(&opts.log_level);
+    init_logger(
+        "Distrod".to_owned(),
+        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
+    );
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
     }
     let mut s = String::new();
     let _ = io::stdin().read_line(&mut s);
-}
-
-fn init_logger(log_level: &Option<LogLevel>) {
-    let mut env_logger_builder = env_logger::Builder::new();
-
-    if let Some(ref level) = log_level {
-        env_logger_builder.filter_level(
-            log::LevelFilter::from_str(
-                <LogLevel as strum::VariantNames>::VARIANTS[*level as usize],
-            )
-            .unwrap(),
-        );
-    } else {
-        env_logger_builder.filter_level(log::LevelFilter::Info);
-    }
-
-    env_logger_builder.format(move |buf, record| {
-        writeln!(
-            buf,
-            "{}{} {}",
-            "[Distrod]".bright_green(),
-            match record.level() {
-                log::Level::Info => "".to_string(),
-                log::Level::Error | log::Level::Warn =>
-                    format!("[{}]", record.level()).red().to_string(),
-                _ => format!("[{}]", record.level()).bright_green().to_string(),
-            },
-            record.args()
-        )
-    });
-    env_logger_builder.init();
 }
 
 fn run(opts: Opts) -> Result<()> {

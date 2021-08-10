@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
-use std::io::{BufWriter, Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::Read;
+use std::io::{BufWriter, Write};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 use std::sync::{Arc, RwLock};

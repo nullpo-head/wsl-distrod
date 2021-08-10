@@ -1,7 +1,44 @@
 use crate::distro_image::{DefaultImageFetcher, DistroImageFetcher, DistroImageList};
 use anyhow::{bail, Context, Result};
 use colored::*;
-use std::{ffi::OsString, io::Write};
+use std::{ffi::OsString, io::Write, str::FromStr};
+use strum::{EnumString, EnumVariantNames};
+
+#[derive(Copy, Clone, Debug, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "kebab-case")]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+pub fn init_logger(app_name: String, log_level: LogLevel) {
+    let mut env_logger_builder = env_logger::Builder::new();
+
+    env_logger_builder.filter_level(
+        log::LevelFilter::from_str(<LogLevel as strum::VariantNames>::VARIANTS[log_level as usize])
+            .unwrap(),
+    );
+
+    env_logger_builder.format(move |buf, record| {
+        writeln!(
+            buf,
+            "{}{} {}",
+            format!("[{}]", app_name).bright_green(),
+            match record.level() {
+                log::Level::Info => "".to_string(),
+                log::Level::Error | log::Level::Warn =>
+                    format!("[{}]", record.level()).red().to_string(),
+                _ => format!("[{}]", record.level()).bright_green().to_string(),
+            },
+            record.args()
+        )
+    });
+    env_logger_builder.init();
+}
 
 pub fn choose_from_list(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>> {
     match list {

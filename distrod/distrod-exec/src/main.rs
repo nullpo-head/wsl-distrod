@@ -1,15 +1,12 @@
 use anyhow::{bail, Context, Result};
-use colored::*;
+use libs::cli_ui::{init_logger, LogLevel};
 use libs::distro::Distro;
 use libs::multifork::set_noninheritable_sig_ign;
 use nix::unistd::{Gid, Uid};
 use std::ffi::{CString, OsStr, OsString};
-use std::io::Write;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
-use std::str::FromStr;
 use structopt::StructOpt;
-use strum::{EnumString, EnumVariantNames};
 
 use libs::passwd::Credential;
 
@@ -27,55 +24,16 @@ pub struct Opts {
     pub log_level: Option<LogLevel>,
 }
 
-#[derive(Copy, Clone, Debug, EnumString, EnumVariantNames)]
-#[strum(serialize_all = "kebab-case")]
-pub enum LogLevel {
-    Off,
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
 fn main() {
     let opts = Opts::from_args();
-    init_logger(&opts.log_level);
+    init_logger(
+        "Distrod".to_owned(),
+        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
+    );
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
     }
-}
-
-fn init_logger(log_level: &Option<LogLevel>) {
-    let mut env_logger_builder = env_logger::Builder::new();
-
-    if let Some(ref level) = log_level {
-        env_logger_builder.filter_level(
-            log::LevelFilter::from_str(
-                <LogLevel as strum::VariantNames>::VARIANTS[*level as usize],
-            )
-            .unwrap(),
-        );
-    } else {
-        env_logger_builder.filter_level(log::LevelFilter::Info);
-    }
-
-    env_logger_builder.format(move |buf, record| {
-        writeln!(
-            buf,
-            "{}{} {}",
-            "[Distrod]".bright_green(),
-            match record.level() {
-                log::Level::Info => "".to_string(),
-                log::Level::Error | log::Level::Warn =>
-                    format!("[{}]", record.level()).red().to_string(),
-                _ => format!("[{}]", record.level()).bright_green().to_string(),
-            },
-            record.args()
-        )
-    });
-    env_logger_builder.init();
 }
 
 fn run(opts: Opts) -> Result<()> {

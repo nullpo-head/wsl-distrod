@@ -1,18 +1,15 @@
 use anyhow::{anyhow, bail, Context, Result};
-use colored::*;
 use distro::Distro;
-use libs::cli_ui::{choose_from_list, prompt_path};
+use libs::cli_ui::{choose_from_list, init_logger, prompt_path, LogLevel};
 use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
 use std::fs::File;
-use std::io::{stdin, Read, Write};
+use std::io::{stdin, Read};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
-use std::str::FromStr;
 use structopt::StructOpt;
-use strum::{EnumString, EnumVariantNames};
 use xz2::read::XzDecoder;
 
 use libs::command_alias::CommandAlias;
@@ -36,17 +33,6 @@ pub struct Opts {
     pub log_level: Option<LogLevel>,
     #[structopt(subcommand)]
     pub command: Subcommand,
-}
-
-#[derive(Copy, Clone, Debug, EnumString, EnumVariantNames)]
-#[strum(serialize_all = "kebab-case")]
-pub enum LogLevel {
-    Off,
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
 }
 
 #[derive(Debug, StructOpt)]
@@ -120,7 +106,7 @@ pub struct DisableOpts {}
 
 fn main() {
     if is_executed_as_alias() {
-        init_logger(&Some(LogLevel::Info));
+        init_logger("Distrod".to_owned(), LogLevel::Info);
         if let Err(err) = run_as_command_alias() {
             log::error!("{:?}", err);
         }
@@ -128,42 +114,14 @@ fn main() {
     }
 
     let opts = Opts::from_args();
-    init_logger(&opts.log_level);
+    init_logger(
+        "Distrod".to_owned(),
+        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
+    );
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
     }
-}
-
-fn init_logger(log_level: &Option<LogLevel>) {
-    let mut env_logger_builder = env_logger::Builder::new();
-
-    if let Some(ref level) = log_level {
-        env_logger_builder.filter_level(
-            log::LevelFilter::from_str(
-                <LogLevel as strum::VariantNames>::VARIANTS[*level as usize],
-            )
-            .unwrap(),
-        );
-    } else {
-        env_logger_builder.filter_level(log::LevelFilter::Info);
-    }
-
-    env_logger_builder.format(move |buf, record| {
-        writeln!(
-            buf,
-            "{}{} {}",
-            "[Distrod]".bright_green(),
-            match record.level() {
-                log::Level::Info => "".to_string(),
-                log::Level::Error | log::Level::Warn =>
-                    format!("[{}]", record.level()).red().to_string(),
-                _ => format!("[{}]", record.level()).bright_green().to_string(),
-            },
-            record.args()
-        )
-    });
-    env_logger_builder.init();
 }
 
 fn is_executed_as_alias() -> bool {
