@@ -6,7 +6,7 @@ use std::os::linux::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::container::Container;
-use crate::distrod_config::{get_distrod_systemd_service_dir, DistrodConfig};
+use crate::distrod_config::DistrodConfig;
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
@@ -152,13 +152,6 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     )? {
         let path = path?;
         fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
-    }
-
-    // Make symlinks to Distrod's utility services
-    let link = path.as_ref().join("etc/systemd/system/portproxy.service");
-    if !link.exists() {
-        std::os::unix::fs::symlink(get_distrod_systemd_service_dir(), link)
-            .with_context(|| "Failed to make a symlink to portproxy.service.")?;
     }
 
     // echo hostname to /etc/hostname
