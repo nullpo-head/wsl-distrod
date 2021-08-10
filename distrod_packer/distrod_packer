@@ -16,10 +16,12 @@ def main():
     parser.add_argument(
         'output_path', help='The path of the output rootfs image.', type=str)
     parser.add_argument(
-        '--make_distrod_release', '-r', help='Pack the release of in-distro distrod command instead of the rootfs.', action='store_true')
+        '--pack-distrod-opt-dir',
+        help='Pack only /opt/distrod directory for the in-distro distrod command, instead of packing the rootfs.',
+        action='store_true')
     args = parser.parse_args()
-    if args.make_distrod_release:
-        pack_distrod_release(args.workspace_path,
+    if args.pack_distrod_opt_dir:
+        pack_distrod_opt_dir(args.workspace_path,
                              os.path.abspath(args.output_path))
     else:
         pack_rootfs(args.workspace_path, os.path.abspath(args.output_path))
@@ -35,7 +37,7 @@ def pack_rootfs(workspace_path: str, output_path: str):
         make_dir_deletable(work_dir)
 
 
-def pack_distrod_release(workspace_path: str, output_path: str):
+def pack_distrod_opt_dir(workspace_path: str, output_path: str):
     if not output_path.startswith("/"):
         raise Exception("output path should be an absolute path")
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -122,7 +124,7 @@ def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
 
 
 def make_minimum_mountpoints(work_dir: str):
-    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc", "/conf"]
+    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
     for dir in dirs:
         os.makedirs(work_dir + dir)
 
