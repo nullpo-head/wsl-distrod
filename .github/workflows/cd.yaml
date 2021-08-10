@@ -87,14 +87,14 @@ jobs:
         run: |
           echo "ARCH_NAME=$(uname -m)" >> $GITHUB_ENV
 
-      - name: Download opt_distrod
+      - name: Download the Distrod's rootfs
         uses: actions/download-artifact@v2
         with:
-          name: "opt_distrod-${{ env.ARCH_NAME }}"
+          name: "distrod_root-${{ env.ARCH_NAME }}"
           path: rootfs
 
       - name: Build
-        run: make -f windows.mk ROOTFS_PATH=rootfs/opt_distrod.tar.gz distrod_wsl_launcher
+        run: make -f windows.mk ROOTFS_PATH=rootfs/distrod_root.tar.gz distrod_wsl_launcher
 
       - name: Upload for the assets
         uses: actions/upload-artifact@v2
@@ -139,14 +139,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y patchelf
 
-      - name: Build
+      - name: Build the Distrod command
         run: make distrod-release
 
-      - name: Upload opt_distrod.tar.gz for the Windows build and the assets
+      - name: Build the Distrod rootfs
+        run: make OUTPUT_ROOTFS_PATH=distrod_root.tar.gz rootfs
+
+      - name: Upload opt_distrod.tar.gz for the assets
         uses: actions/upload-artifact@v2
         with:
           name: "opt_distrod-${{ env.ARCH_NAME }}"
           path: opt_distrod.tar.gz
+          if-no-files-found: error
+
+      - name: Upload distrod_root.tar.gz for the Windows build
+        uses: actions/upload-artifact@v2
+        with:
+          name: "distrod_root-${{ env.ARCH_NAME }}"
+          path: distrod_root.tar.gz
           if-no-files-found: error
 
   build-portproxy-exe:
