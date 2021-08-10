@@ -386,8 +386,8 @@ fn add_user(
     wsl.launch_interactive(
         distro_name,
         format!(
-            "( ( which adduser > /dev/null 2>&1 && adduser {} ) || ( useradd -m '{}' && while ! passwd {}; do : ; done  ) ) && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
-            user_name, user_name, user_name, user_name
+            "useradd -m '{}' && while ! passwd {}; do : ; done && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
+            user_name, user_name, user_name
         ),
         true,
     )?;
