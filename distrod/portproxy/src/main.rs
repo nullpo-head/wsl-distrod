@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use libs::cli_ui::{init_logger, LogLevel};
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
 use tokio::io::AsyncWriteExt;
@@ -8,6 +9,8 @@ use tokio::net::{TcpListener, TcpStream};
 #[derive(Debug, StructOpt)]
 #[structopt(name = "portproxy", rename_all = "kebab")]
 pub struct Opts {
+    #[structopt(short, long)]
+    pub log_level: Option<LogLevel>,
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
@@ -41,9 +44,13 @@ pub enum ShowItem {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::from_args();
+    init_logger(
+        "PortProxy".to_owned(),
+        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
+    );
 
     if let Err(e) = run(opts).await {
-        eprintln!("Error: {}", e);
+        log::error!("{:?}", e);
         std::process::exit(1);
     }
 
@@ -55,6 +62,7 @@ async fn run(opts: Opts) -> Result<()> {
         Subcommand::Proxy(proxy_opts) => run_proxy(proxy_opts).await,
         Subcommand::Show(show_opts) => run_show(show_opts)?,
     };
+    log::trace!("Exiting run.");
     Ok(())
 }
 
@@ -75,7 +83,8 @@ fn run_show(_opts: ShowOpts) -> Result<()> {
             }
         })
         .ok_or_else(|| anyhow!("'eth0' is not found."))?;
-    println!("{}", eth0_addr);
+    log::trace!("eth0 addr is '{}'", eth0_addr);
+    print!("{}", eth0_addr);
     Ok(())
 }
 
@@ -90,12 +99,13 @@ async fn run_proxy(opts: ProxyOpts) {
     let mut handles = vec![];
     for tcp_port in opts.tcp4 {
         if tcp_port == 0 {
+            log::info!("Skipping port 0");
             continue;
         }
         let dest_addr = format!("{}:{}", &opts.dest_addr, tcp_port);
         handles.push(tokio::spawn(async move {
             if let Err(e) = proxy_tcp_port(tcp_port, dest_addr).await {
-                eprintln!("Error: {}", e);
+                log::error!("{:?}", e);
             }
         }));
     }
@@ -118,7 +128,7 @@ async fn proxy_tcp_port(port: u16, dest_addr: String) -> Result<()> {
         let dest = dest_addr.clone();
         tokio::spawn(async move {
             if let Err(e) = proxy_tcp_stream(stream, dest).await {
-                eprintln!("Error: {}", e);
+                log::error!("{:?}", e);
             }
         });
     }

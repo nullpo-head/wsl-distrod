@@ -5,6 +5,7 @@ authors = ["Takaya Saeki <abc.tkys+pub@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+libs = { path = "../libs" }
 anyhow = "1"
 #tokio = { version = "1", features = ["io-util", "net", "rt", "rt-multi-thread"] }
 tokio = { version = "1", features = ["full"] }
