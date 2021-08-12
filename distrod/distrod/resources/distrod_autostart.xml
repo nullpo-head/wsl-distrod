@@ -38,8 +38,29 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Windows\System32\cmd.exe</Command>
-      <Arguments>/C "wsl -d {{DISTRO_NAME}} exit"</Arguments>
+      <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe</Command>
+      <!-- Why not just starting WSL by wsl.exe command?
+           It's because wsl.exe has a bug that it will not start if it is started
+           by a non-administrative task that starts when Windows starts,
+           and starting a long-running WSL process as admin has a security risk
+           which allows local privilege escalation. -->
+      <Arguments>-Command "do {
+$WslLaunchInteractive = @'
+[DllImport(\"wslapi.dll\")]
+public static extern uint WslLaunchInteractive(
+  [MarshalAs(UnmanagedType.LPWStr)]string DistributionName,
+  [MarshalAs(UnmanagedType.LPWStr)]string Command,
+  [MarshalAs(UnmanagedType.U1)]bool UseCurrentWorkingDirectory,
+  out uint ExitCode
+);
+'@;
+
+$wslapi = Add-Type -MemberDefinition $WslLaunchInteractive -Name 'WslApi' -Namespace 'Win32' -PassThru;
+$exitcode=256;
+$wslapi::WslLaunchInteractive('{{DISTRO_NAME}}', 'exit', $false, [ref]$exitcode);
+} while($false)
+"
+      </Arguments>
     </Exec>
   </Actions>
 </Task>
