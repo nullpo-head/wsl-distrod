@@ -19,4 +19,6 @@ pub mod passwd;
 #[cfg(target_os = "linux")]
 pub mod procfile;
 #[cfg(target_os = "linux")]
+pub mod systemdunit;
+#[cfg(target_os = "linux")]
 pub mod wsl_interop;

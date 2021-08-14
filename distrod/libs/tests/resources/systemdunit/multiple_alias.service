@@ -1,0 +1,13 @@
+[Unit]
+Description=unit
+Wants=network.target
+
+[Service]
+ExecStart=/bin/exit
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+Alias=multiple_alias1.service
+Alias=multiple_alias2.service multiple_alias3.service
+Other=unrelated.service

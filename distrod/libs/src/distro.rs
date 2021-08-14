@@ -11,6 +11,7 @@ use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
+use crate::systemdunit::SystemdUnitDisabler;
 use serde::{Deserialize, Serialize};
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
@@ -171,6 +172,24 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         File::create(&resolv_conf_path)
             .with_context(|| format!("Failed to touch '{:?}'", &resolv_conf_path))?;
     }
+
+    // Disable or mask incompatible systemd services
+    SystemdUnitDisabler::new(path.as_ref(), "dhcpcd.service")
+        .disable()
+        .with_context(|| "Failed to disable dhcpcd.service")?;
+    SystemdUnitDisabler::new(path.as_ref(), "NetworkManager.service")
+        .disable()
+        .with_context(|| "Failed to disable NetworkManager.service")?;
+    SystemdUnitDisabler::new(path.as_ref(), "multipathd.service")
+        .disable()
+        .with_context(|| "Failed to disable multipathd.service")?;
+    SystemdUnitDisabler::new(path.as_ref(), "systemd-remount-fs.service")
+        .mask()
+        .with_context(|| "Failed to mask systemd-remount-fs.service")?;
+    SystemdUnitDisabler::new(path.as_ref(), "systemd-modules-load.service")
+        .mask()
+        .with_context(|| "Failed to mask systemd-modules-load.service")?;
+
     Ok(())
 }
 
