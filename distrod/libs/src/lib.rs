@@ -11,6 +11,8 @@ pub mod container;
 #[cfg(target_os = "linux")]
 pub mod distro;
 #[cfg(target_os = "linux")]
+pub mod envfile;
+#[cfg(target_os = "linux")]
 pub mod mount_info;
 #[cfg(target_os = "linux")]
 pub mod multifork;

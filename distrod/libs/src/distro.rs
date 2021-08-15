@@ -7,11 +7,13 @@ use std::path::{Path, PathBuf};
 
 use crate::container::Container;
 use crate::distrod_config::DistrodConfig;
+use crate::envfile::EnvFile;
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 use crate::systemdunit::SystemdUnitDisabler;
+use crate::wsl_interop::collect_wsl_env_vars;
 use serde::{Deserialize, Serialize};
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
@@ -79,6 +81,8 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
+        setup_etc_environment_file(&self.rootfs)
+            .with_context(|| "Failed to setup the /etc/environment file.")?;
         self.container
             .launch(None, &self.rootfs, DISTRO_OLD_ROOT_PATH)
             .with_context(|| "Failed to launch a container.")?;
@@ -191,6 +195,22 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         }
     }
 
+    Ok(())
+}
+
+fn setup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
+    let env_file_path = rootfs_path.as_ref().join("etc/environment");
+    let mut env_file = EnvFile::open(&env_file_path)
+        .with_context(|| format!("Failed to open '{:?}'.", &&env_file_path))?;
+
+    // Set the WSL envs in the default environment variables
+    let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
+    for (key, value) in &wsl_envs {
+        env_file.put(&key.to_string_lossy(), value.to_string_lossy().to_string());
+    }
+    env_file
+        .save()
+        .with_context(|| "Failed to save the environment file.")?;
     Ok(())
 }
 
