@@ -1,4 +1,4 @@
 tar:
-	tar czf unit_dir.tar.gz *.service ./multi-user.target/*
+	tar czf unit_dir.tar.gz system units
 
 .PHONY: tar

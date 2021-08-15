@@ -174,21 +174,22 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     }
 
     // Disable or mask incompatible systemd services
-    SystemdUnitDisabler::new(path.as_ref(), "dhcpcd.service")
-        .disable()
-        .with_context(|| "Failed to disable dhcpcd.service")?;
-    SystemdUnitDisabler::new(path.as_ref(), "NetworkManager.service")
-        .disable()
-        .with_context(|| "Failed to disable NetworkManager.service")?;
-    SystemdUnitDisabler::new(path.as_ref(), "multipathd.service")
-        .disable()
-        .with_context(|| "Failed to disable multipathd.service")?;
-    SystemdUnitDisabler::new(path.as_ref(), "systemd-remount-fs.service")
-        .mask()
-        .with_context(|| "Failed to mask systemd-remount-fs.service")?;
-    SystemdUnitDisabler::new(path.as_ref(), "systemd-modules-load.service")
-        .mask()
-        .with_context(|| "Failed to mask systemd-modules-load.service")?;
+    let to_be_disabled = [
+        "dhcpcd.service",
+        "NetworkManager.service",
+        "multipathd.service",
+    ];
+    for unit in &to_be_disabled {
+        if let Err(err) = SystemdUnitDisabler::new(path.as_ref(), unit).disable() {
+            log::warn!("Faled to disable {}. Error: {:?}", unit, err);
+        }
+    }
+    let to_be_masked = ["systemd-remount-fs.service", "systemd-modules-load.service"];
+    for unit in &to_be_masked {
+        if let Err(err) = SystemdUnitDisabler::new(path.as_ref(), unit).mask() {
+            log::warn!("Faled to mask {}. Error: {:?}", unit, err);
+        }
+    }
 
     Ok(())
 }
