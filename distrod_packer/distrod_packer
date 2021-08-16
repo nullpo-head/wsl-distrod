@@ -62,7 +62,7 @@ def make_distrod_distribution(workspace_path: str, output_dst: str):
     make_distrod_project_static_windows(workspace_path, work_dir, "portproxy")
     copy_distrod_distribution_resources(work_dir)
     set_permissions(work_dir)
-    set_suid(work_dir + get_distrod_dir_in_container("distrod-exec"))
+    set_suid(work_dir + get_bin_dir_in_container("distrod-exec"))
 
 
 def make_distrod_project_static_linux(workspace_path, work_dir, bin_name):
@@ -81,12 +81,12 @@ def make_distrod_project_static_windows(workspace_path, work_dir, bin_name):
 
 def copy_target_binary(bin_name: str, workspace_path: str, work_dir: str) -> str:
     shutil.copy(f"{workspace_path}/target/release/{bin_name}",
-                work_dir + get_distrod_dir_in_container(bin_name))
-    return get_distrod_dir_in_container(bin_name)
+                work_dir + get_bin_dir_in_container(bin_name))
+    return get_bin_dir_in_container(bin_name)
 
 
 def copy_dependency_libs(bin_name: str, work_dir: str):
-    distrod_bin = work_dir + get_distrod_dir_in_container(bin_name)
+    distrod_bin = work_dir + get_bin_dir_in_container(bin_name)
     ld, libs = extract_dependency_libs(distrod_bin)
     ld_path = work_dir + get_ld_dir_in_container(os.path.basename(ld))
     shutil.copy(ld, ld_path)
@@ -132,11 +132,12 @@ def make_minimum_mountpoints(work_dir: str):
 def make_distrod_distribution_dirs(work_dir: str):
     dirs = [
         get_distrod_dir_in_container(),
+        get_distrod_dir_in_container("bin"),
         get_distrod_dir_in_container("alias"),
         get_distrod_dir_in_container("lib"),
         get_distrod_dir_in_container("ld")]
     for dir in dirs:
-        os.makedirs(work_dir + dir)
+        os.makedirs(work_dir + dir, exist_ok=True)
 
 
 def set_permissions(work_dir: str):
@@ -178,6 +179,13 @@ def get_resources_dir(inner_path: Optional[str] = None) -> str:
     if inner_path:
         path = f"{path}/{inner_path}"
     return path
+
+
+def get_bin_dir_in_container(inner_path: Optional[str] = None) -> str:
+    path = "bin"
+    if inner_path:
+        path = f"{path}/{inner_path}"
+    return get_distrod_dir_in_container(path)
 
 
 def get_lib_dir_in_container(inner_path: Optional[str] = None) -> str:

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+ORIG_CHSH=""$(which -a chsh | tail -n 1)""
+if [ -t 0 ]; then
+    echo "[Distrod] Run 'sudo /opt/distrod/distrod enable' after chsh succeeds." >&2
+    echo "[Distrod] It's necessary for Systemd to work as the init process." >&2
+fi
+"$ORIG_CHSH" "$@"

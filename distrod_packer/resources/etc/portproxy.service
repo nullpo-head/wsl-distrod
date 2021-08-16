@@ -7,7 +7,7 @@ Wants=network-online.target systemd-networkd-wait-online.service
 Restart=on-failure
 RestartSec=15
 
-ExecStart=/bin/sh -c '/opt/distrod/portproxy.exe proxy $(/opt/distrod/portproxy show ipv4) -t $(cat /opt/distrod/conf/tcp4_ports)'
+ExecStart=/bin/sh -c '/opt/distrod/bin/portproxy.exe proxy $(/opt/distrod/bin/portproxy show ipv4) -t $(cat /opt/distrod/conf/tcp4_ports)'
 
 [Install]
 WantedBy=multi-user.target

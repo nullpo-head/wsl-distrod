@@ -69,7 +69,15 @@ pub fn get_alias_dir() -> &'static str {
     DISTROD_ALIAS_DIR.as_str()
 }
 
-static DISTROD_BIN_PATH: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "distrod"));
+static DISTROD_BIN_DIR: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "bin"));
+
+/// The path to the distrod binary.
+pub fn get_distrod_bin_dir_path() -> &'static str {
+    DISTROD_BIN_DIR.as_str()
+}
+
+static DISTROD_BIN_PATH: Lazy<String> =
+    Lazy::new(|| format!("{}/{}", DISTROD_BIN_DIR.as_str(), "distrod"));
 
 /// The path to the distrod binary.
 pub fn get_distrod_bin_path() -> &'static str {
@@ -77,7 +85,7 @@ pub fn get_distrod_bin_path() -> &'static str {
 }
 
 static DISTROD_EXEC_BIN_PATH: Lazy<String> =
-    Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "distrod-exec"));
+    Lazy::new(|| format!("{}/{}", DISTROD_BIN_DIR.as_str(), "distrod-exec"));
 
 /// The path to the distrod-exec binary.
 pub fn get_distrod_exec_bin_path() -> &'static str {

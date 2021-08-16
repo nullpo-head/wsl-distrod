@@ -67,6 +67,10 @@ impl EnvFile {
         self.envs.insert(key.to_owned(), vec![(usize::MAX, value)]);
     }
 
+    pub fn remove(&mut self, key: &str) {
+        self.envs.remove(key);
+    }
+
     pub fn save(&mut self) -> Result<()> {
         let mut lines = self
             .envs

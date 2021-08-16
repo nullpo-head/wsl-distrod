@@ -3,11 +3,11 @@ use nix::fcntl::OFlag;
 use nix::libc::c_int;
 use nix::sys::signal;
 use std::convert::From;
-use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::os::unix::io::FromRawFd;
+use std::os::unix::prelude::CommandExt;
 use std::process::Command;
 
 pub struct CommandByMultiFork<'a> {
@@ -18,9 +18,9 @@ pub struct CommandByMultiFork<'a> {
 }
 
 impl<'a> CommandByMultiFork<'a> {
-    pub fn new<S: AsRef<OsStr>>(program: S) -> CommandByMultiFork<'a> {
+    pub fn new(command: Command) -> CommandByMultiFork<'a> {
         CommandByMultiFork {
-            command: Command::new(program),
+            command,
             pre_second_fork: None,
             proxy_process: None,
             does_triple_fork: false,
@@ -29,6 +29,15 @@ impl<'a> CommandByMultiFork<'a> {
 
     pub fn do_triple_fork(&mut self, does_triple_fork: bool) -> &mut CommandByMultiFork<'a> {
         self.does_triple_fork = does_triple_fork;
+        self
+    }
+
+    // Define proxy function to allow it to be called before pre_second_fork for readability.
+    pub unsafe fn pre_exec<F>(&mut self, f: F) -> &mut CommandByMultiFork<'a>
+    where
+        F: FnMut() -> std::io::Result<()> + Send + Sync + 'static,
+    {
+        self.command.pre_exec(f);
         self
     }
 
@@ -94,12 +103,6 @@ impl<'a> Deref for CommandByMultiFork<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.command
-    }
-}
-
-impl<'a> DerefMut for CommandByMultiFork<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.command
     }
 }
 
@@ -198,8 +201,9 @@ mod tests {
 
     #[test]
     fn test_insert_proxy() {
-        let mut doublefork = CommandByMultiFork::new("/bin/bash");
-        doublefork.args(&["-c", "sleep 1; exit 42"]);
+        let mut command = Command::new("/bin/bash");
+        command.args(&["-c", "sleep 1; exit 42"]);
+        let mut doublefork = CommandByMultiFork::new(command);
         let mut waiter = doublefork.insert_waiter_proxy().unwrap();
         let _ = doublefork.spawn().unwrap();
         let exit_code = waiter.wait();
@@ -208,11 +212,12 @@ mod tests {
 
     #[test]
     fn test_inserted_proxy_ignore_signal() {
-        let mut doublefork = CommandByMultiFork::new("/bin/bash");
-        doublefork.args(&[
+        let mut command = Command::new("/bin/bash");
+        command.args(&[
             "-c",
             "trap '' SIGINT; kill -SIGINT $PPID; sleep 1; exit 42;",
         ]);
+        let mut doublefork = CommandByMultiFork::new(command);
         let mut waiter = doublefork.insert_waiter_proxy().unwrap();
         let _ = doublefork.spawn().unwrap();
         let exit_code = waiter.wait();

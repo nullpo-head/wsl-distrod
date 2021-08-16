@@ -3,14 +3,14 @@ use nix::sched::CloneFlags;
 use nix::unistd::{chown, Gid, Uid};
 use nix::NixPath;
 use passfd::FdPassingExt;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::prelude::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::mount_info::{get_mount_entries, MountEntry};
 use crate::multifork::{CommandByMultiFork, Waiter};
@@ -62,8 +62,9 @@ impl Container {
 
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
-            let mut command = CommandByMultiFork::new(&init[0]);
+            let mut command = Command::new(&init[0]);
             command.args(&init[1..]);
+            let mut command = CommandByMultiFork::new(command);
             let fds_to_keep = vec![fd_channel_child.as_raw_fd()];
             command.pre_second_fork(move || {
                 daemonize(&fds_to_keep)
@@ -111,34 +112,13 @@ impl Container {
         Ok(())
     }
 
-    pub fn exec_command<I, S, T1, T2, P>(
-        &self,
-        program: S,
-        args: I,
-        wd: Option<P>,
-        arg0: Option<T2>,
-        cred: Option<&Credential>,
-    ) -> Result<Waiter>
-    where
-        I: IntoIterator<Item = T1>,
-        S: AsRef<OsStr>,
-        T1: AsRef<OsStr>,
-        T2: AsRef<OsStr>,
-        P: AsRef<Path>,
-    {
+    pub fn exec_command(&self, command: Command, cred: Option<&Credential>) -> Result<Waiter> {
         log::debug!("Container::exec_command.");
         if self.init_pid.is_none() {
             bail!("This container is not launched yet.");
         }
 
-        let mut command = CommandByMultiFork::new(&program);
-        command.args(args);
-        if let Some(arg0) = arg0 {
-            command.arg0(arg0);
-        }
-        if let Some(wd) = wd {
-            command.current_dir(wd);
-        }
+        let mut command = CommandByMultiFork::new(command);
         command.pre_second_fork(|| {
             enter_namespace(self.init_procfile.as_ref().unwrap())
                 .with_context(|| "Failed to enter the init's namespace")?;
@@ -153,7 +133,7 @@ impl Container {
             .with_context(|| "Failed to request a proxy process.")?;
         command
             .spawn()
-            .with_context(|| format!("Container::exec_command failed: {:?}", &program.as_ref()))?;
+            .with_context(|| "Container::exec_command failed")?;
         log::debug!("Double fork done.");
         Ok(waiter)
     }
