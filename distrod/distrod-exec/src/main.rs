@@ -74,10 +74,12 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
-    let cred = get_real_credential()?;
+    let inner = || -> Result<()> {
+        let cred = get_real_credential()?;
 
-    let distro =
-        match Distro::get_running_distro().with_context(|| "Failed to get the running distro.")? {
+        let distro = match Distro::get_running_distro()
+            .with_context(|| "Failed to get the running distro.")?
+        {
             Some(distro) => distro,
             None => {
                 // Systemd requires the real uid / gid to be the root.
@@ -87,18 +89,25 @@ where
             }
         };
 
-    log::debug!("Executing a command in the distro.");
-    set_noninheritable_sig_ign();
-    let mut waiter = distro.exec_command(
-        command.as_ref(),
-        args,
-        Some(std::env::current_dir().with_context(|| "Failed to get the current dir.")?),
-        Some(arg0),
-        Some(&cred),
-    )?;
-    cred.drop_privilege();
-    let status = waiter.wait();
-    std::process::exit(status as i32)
+        log::debug!("Executing a command in the distro.");
+        set_noninheritable_sig_ign();
+        let mut waiter = distro.exec_command(
+            command.as_ref(),
+            args,
+            Some(std::env::current_dir().with_context(|| "Failed to get the current dir.")?),
+            Some(arg0.as_ref()),
+            Some(&cred),
+        )?;
+        cred.drop_privilege();
+        let status = waiter.wait();
+        std::process::exit(status as i32)
+    };
+
+    if let Err(e) = inner() {
+        log::error!("Failed to run the given command in the Systemd container. Fall back to normal WSL2 command execution without using Systemd. {:?}", e);
+        return exec_command(command, arg0.as_ref(), args);
+    }
+    Ok(())
 }
 
 fn get_real_credential() -> Result<Credential> {
