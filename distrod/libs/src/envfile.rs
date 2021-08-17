@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 pub struct EnvFile {
     pub path: PathBuf,
@@ -17,18 +17,29 @@ pub struct EnvFile {
 impl EnvFile {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<EnvFile> {
         let mut envs: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-        let file = BufReader::new(
-            File::open(path.as_ref())
-                .with_context(|| format!("Failed to open {:?}", path.as_ref()))?,
-        );
-        for (i, line) in file.lines().enumerate() {
+        let file = File::open(path.as_ref());
+
+        if let Err(std::io::ErrorKind::NotFound) = file.as_ref().map_err(|e| e.kind()) {
+            return Ok(EnvFile {
+                path: path.as_ref().to_owned(),
+                envs: HashMap::<String, Vec<(usize, String)>>::default(),
+            });
+        }
+
+        let reader =
+            BufReader::new(file.with_context(|| format!("Failed to open {:?}", path.as_ref()))?);
+        for (i, line) in reader.lines().enumerate() {
             let line = line.with_context(|| "Failed to read a line.")?;
+            if line.trim().is_empty() {
+                continue;
+            }
             let sep_i = line.find('=');
             if sep_i.is_none() {
-                bail!(format!(
+                log::debug!(
                     "invalid /etc/environment file. No '=' is found. line: {}.",
                     i
-                ));
+                );
+                continue;
             }
             let sep_i = sep_i.unwrap();
             let env_name = &line[0..sep_i];
@@ -154,6 +165,38 @@ mod tests {
 			NEW1=NEW1\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_empty_env_file() {
+        let tmp = NamedTempFile::new().unwrap();
+        let env = EnvFile::open(tmp.path());
+        assert!(env.is_ok());
+
+        let mut env = env.unwrap();
+        env.put("TEST", "VALUE".to_owned());
+        env.save().unwrap();
+        let expected = "\
+		    TEST=VALUE\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_open_nonexistential_env_file() {
+        let tmpdir = TempDir::new().unwrap();
+        let env = EnvFile::open(tmpdir.path().join("dont_exist"));
+        assert!(env.is_ok());
+
+        let mut env = env.unwrap();
+        env.put("TEST", "VALUE".to_owned());
+        env.save().unwrap();
+        let expected = "\
+		    TEST=VALUE\n\
+		";
+        let new_cont = std::fs::read_to_string(tmpdir.path().join("dont_exist")).unwrap();
         assert_eq!(new_cont, expected);
     }
 }
