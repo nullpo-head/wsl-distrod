@@ -83,8 +83,9 @@ impl Distro {
     }
 
     pub fn launch(&mut self) -> Result<()> {
-        setup_etc_environment_file(&self.rootfs)
-            .with_context(|| "Failed to setup the /etc/environment file.")?;
+        if let Err(e) = setup_etc_environment_file(&self.rootfs) {
+            log::warn!("Failed to setup /etc/environment. {:#?}", e);
+        }
         self.container
             .launch(None, &self.rootfs, DISTRO_OLD_ROOT_PATH)
             .with_context(|| "Failed to launch a container.")?;
@@ -129,6 +130,9 @@ impl Distro {
     }
 
     pub fn stop(self, sigkill: bool) -> Result<()> {
+        if let Err(e) = cleanup_etc_environment_file(&self.rootfs) {
+            log::warn!("Failed to clean up /etc/environment. {:#?}", e);
+        }
         self.container.stop(sigkill)
     }
 
@@ -261,6 +265,9 @@ fn setup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
 
 fn cleanup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
     let env_file_path = rootfs_path.as_ref().join("etc/environment");
+    if !env_file_path.exists() {
+        return Ok(());
+    }
     let mut env_file = EnvFile::open(&env_file_path)
         .with_context(|| format!("Failed to open '{:?}'.", &&env_file_path))?;
 
