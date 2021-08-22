@@ -101,7 +101,7 @@ impl PasswdFile {
 
     pub fn update(
         &mut self,
-        updater: fn(passwd: PasswdView) -> Result<Option<Passwd>>,
+        updater: &mut dyn FnMut(PasswdView) -> Result<Option<Passwd>>,
     ) -> Result<()> {
         let mut new_cont = String::new();
         {
@@ -332,7 +332,7 @@ mod tests {
         tmp.read_to_string(&mut orig_cont)?;
 
         let mut passwd_file = PasswdFile::open(tmp.path())?;
-        passwd_file.update(|_| Ok(None))?;
+        passwd_file.update(&mut |_| Ok(None))?;
 
         let mut entries = passwd_file.entries();
         assert_eq!(ROOT, entries.next().unwrap()?);
@@ -355,7 +355,7 @@ mod tests {
         writeln!(&mut tmp, "foo:x:1000:1000:,,,::/sbin/nologin")?;
 
         let mut passwd_file = PasswdFile::open(tmp.path())?;
-        passwd_file.update(|passwd| {
+        passwd_file.update(&mut |passwd| {
             let mut new_shell = PathBuf::from(distrod_config::get_alias_dir());
             new_shell.push(Path::new(passwd.shell).strip_prefix("/").unwrap());
             Ok(Some(Passwd {
