@@ -1,12 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
 use distro::Distro;
-use libs::cli_ui::{choose_from_list, init_logger, prompt_path, LogLevel};
+use libs::cli_ui::{build_progress_bar, choose_from_list, init_logger, prompt_path, LogLevel};
 use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsString};
 use std::fs::File;
-use std::io::{stdin, Read};
+use std::io::{stdin, Cursor, Read};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use structopt::StructOpt;
@@ -15,7 +15,8 @@ use xz2::read::XzDecoder;
 use libs::command_alias::CommandAlias;
 use libs::distro;
 use libs::distro_image::{
-    self, DistroImage, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
+    self, download_file_with_progress, DistroImage, DistroImageFetcher, DistroImageFetcherGen,
+    DistroImageFile,
 };
 use libs::lxd_image::LxdDistroImageList;
 use libs::passwd::IdCredential;
@@ -64,7 +65,7 @@ pub struct ExecOpts {
     #[structopt(short, long)]
     user: Option<String>,
 
-    #[structopt(short, long)]
+    #[structopt(short = "i", long)]
     uid: Option<u32>,
 
     #[structopt(short, long)]
@@ -227,7 +228,8 @@ fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
     Ok(())
 }
 
-fn create_distro(opts: CreateOpts) -> Result<()> {
+#[tokio::main]
+async fn create_distro(opts: CreateOpts) -> Result<()> {
     let image = match opts.image_path {
         None => {
             let local_image_fetcher =
@@ -235,10 +237,11 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
             let lxd_image_fetcher =
                 || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
             let fetchers = vec![
-                Box::new(local_image_fetcher) as Box<DistroImageFetcherGen>,
-                Box::new(lxd_image_fetcher) as Box<DistroImageFetcherGen>,
+                Box::new(local_image_fetcher) as DistroImageFetcherGen,
+                Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
             ];
             distro_image::fetch_image(fetchers, choose_from_list, 1)
+                .await
                 .with_context(|| "Failed to fetch the image list.")?
         }
         Some(path) => DistroImage {
@@ -255,13 +258,10 @@ fn create_distro(opts: CreateOpts) -> Result<()> {
         ) as Box<dyn Read>,
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
-            let client = reqwest::blocking::Client::builder().timeout(None).build()?;
-            let response = client
-                .get(&url)
-                .send()
-                .with_context(|| format!("Failed to download {}.", &url))?;
+            let mut bytes = vec![];
+            download_file_with_progress(&url, build_progress_bar, &mut bytes).await?;
             log::info!("Download done.");
-            Box::new(std::io::Cursor::new(response.bytes()?)) as Box<dyn Read>
+            Box::new(Cursor::new(bytes)) as Box<dyn Read>
         }
     };
 

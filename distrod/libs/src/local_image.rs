@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 
 use crate::distro_image::{
@@ -15,12 +16,13 @@ impl LocalDistroImage {
     }
 }
 
+#[async_trait]
 impl DistroImageFetcher for LocalDistroImage {
     fn get_name(&self) -> &str {
         "Use a local tar.xz file"
     }
 
-    fn fetch(&self) -> Result<DistroImageList> {
+    async fn fetch(&self) -> Result<DistroImageList> {
         let mut path;
         loop {
             path = (self.prompt_path)("Please input the path to your .tar.xz image file.", None)?;

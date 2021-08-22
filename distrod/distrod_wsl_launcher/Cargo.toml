@@ -17,9 +17,11 @@ anyhow = "1.0"
 xz2 = "0.1"
 tar = "0.4"
 flate2 = "1.0"
+indicatif = "0.16"
 chrono = "0.4"
 scraper = "0.12"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
+reqwest = { version = "0.11" }
+tokio = { version = "1.10", features = ["rt", "rt-multi-thread", "macros"] }
 colored = "2"
 tempfile = "3"
 bytes = "1.0"

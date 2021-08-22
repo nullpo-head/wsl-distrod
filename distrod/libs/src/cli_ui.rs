@@ -118,3 +118,11 @@ pub fn prompt_string(message: &str, target_name: &str, default: Option<&str>) ->
     choice = choice.trim_end().to_owned();
     Ok(choice)
 }
+
+pub fn build_progress_bar(total_size: u64) -> indicatif::ProgressBar {
+    let bar = indicatif::ProgressBar::new(total_size);
+    bar.set_style(indicatif::ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+                    .progress_chars("#>-"));
+    bar
+}

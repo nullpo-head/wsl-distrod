@@ -7,13 +7,15 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.51"
 anyhow = "1.0"
 chrono = "0.4"
 colored = "2"
 log = "0.4"
 env_logger = "0.8"
 scraper = "0.12"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
+indicatif = "0.16"
+reqwest = { version = "0.11" }
 glob = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

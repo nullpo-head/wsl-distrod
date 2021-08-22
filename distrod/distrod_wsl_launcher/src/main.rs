@@ -1,9 +1,12 @@
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use libs::cli_ui::{self, LogLevel};
+use indicatif::ProgressBar;
+use libs::cli_ui::{self, build_progress_bar, LogLevel};
 use libs::cli_ui::{init_logger, prompt_string};
-use libs::distro_image::{self, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile};
+use libs::distro_image::{
+    self, download_file_with_progress, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
+};
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
@@ -137,7 +140,8 @@ fn config_distro(distro_name: &str, opts: ConfigOpts) -> Result<()> {
     Ok(())
 }
 
-fn install_distro(distro_name: &str, opts: InstallOpts) -> Result<()> {
+#[tokio::main]
+async fn install_distro(distro_name: &str, opts: InstallOpts) -> Result<()> {
     let wsl = WslApi::new()
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
 
@@ -158,7 +162,9 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
   BTW, you can run Systemd with distrod, so you can try LXC/LXD with distrod!
 ================================================================================="
     );
-    let lxd_root_tarxz = fetch_distro_image().with_context(|| "Failed to fetch a distro image.")?;
+    let lxd_root_tarxz = fetch_distro_image()
+        .await
+        .with_context(|| "Failed to fetch a distro image.")?;
     let lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
 
     log::info!(
@@ -203,16 +209,17 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     Ok(())
 }
 
-fn fetch_distro_image() -> Result<Box<dyn Read>> {
+async fn fetch_distro_image() -> Result<Box<dyn Read>> {
     let local_image_fetcher =
         || Ok(Box::new(LocalDistroImage::new(cli_ui::prompt_path)) as Box<dyn DistroImageFetcher>);
     let lxd_image_fetcher =
         || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
     let fetchers = vec![
-        Box::new(local_image_fetcher) as Box<DistroImageFetcherGen>,
-        Box::new(lxd_image_fetcher) as Box<DistroImageFetcherGen>,
+        Box::new(local_image_fetcher) as DistroImageFetcherGen,
+        Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
     ];
     let image = distro_image::fetch_image(fetchers, cli_ui::choose_from_list, 1)
+        .await
         .with_context(|| "Failed to fetch the image list.")?;
     match image.image {
         DistroImageFile::Local(path) => {
@@ -222,14 +229,10 @@ fn fetch_distro_image() -> Result<Box<dyn Read>> {
         }
         DistroImageFile::Url(url) => {
             log::info!("Downloading '{}'...", url);
-            let client = reqwest::blocking::Client::builder().timeout(None).build()?;
-            let response = client
-                .get(&url)
-                .send()
-                .with_context(|| format!("Failed to download {}.", &url))?;
-            let bytes = response.bytes().with_context(|| "Download failed.")?;
+            let mut bytes = vec![];
+            download_file_with_progress(&url, build_progress_bar, &mut bytes).await?;
             log::info!("Download done.");
-            Ok(Box::new(Cursor::new(bytes)))
+            Ok(Box::new(Cursor::new(bytes)) as Box<dyn Read>)
         }
     }
 }
@@ -349,6 +352,7 @@ fn add_user(
         ),
         true,
     )?;
+    log::info!("Querying the generated uid. This may take some time depending on your machine.");
     query_uid(wsl, distro_name, user_name, tmp_dir)
 }
 

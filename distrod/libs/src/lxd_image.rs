@@ -3,14 +3,15 @@ use crate::distro_image::{
     ListChooseFn,
 };
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use chrono::NaiveDateTime;
 
 static LINUX_CONTAINERS_ORG_BASE: &str = "https://uk.images.linuxcontainers.org/";
 
-pub fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
+pub async fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
     let mut distro_image_list = Box::new(LxdDistroImageList {}) as Box<dyn DistroImageFetcher>;
     loop {
-        let fetched_image_list = distro_image_list.fetch()?;
+        let fetched_image_list = distro_image_list.fetch().await?;
         match fetched_image_list {
             DistroImageList::Fetcher(_, _, _) => {
                 distro_image_list = choose_from_list(fetched_image_list)?;
@@ -25,13 +26,15 @@ pub fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
 #[derive(Default)]
 pub struct LxdDistroImageList;
 
+#[async_trait]
 impl DistroImageFetcher for LxdDistroImageList {
     fn get_name(&self) -> &str {
         "Download a LXD image"
     }
 
-    fn fetch(&self) -> Result<DistroImageList> {
+    async fn fetch(&self) -> Result<DistroImageList> {
         let distros: Vec<_> = fetch_apache_file_list("images/")
+            .await
             .map(|links| {
                 links
                     .into_iter()
@@ -44,6 +47,7 @@ impl DistroImageFetcher for LxdDistroImageList {
                     .collect()
             })
             .with_context(|| "Failed to parse the distro image list of the LXD image server.")?;
+
         Ok(DistroImageList::Fetcher(
             "a LXD image".to_owned(),
             distros,
@@ -58,13 +62,15 @@ pub struct LxdDistroVersionList {
     version_list_url: String,
 }
 
+#[async_trait]
 impl DistroImageFetcher for LxdDistroVersionList {
     fn get_name(&self) -> &str {
         self.name.as_str()
     }
 
-    fn fetch(&self) -> Result<DistroImageList> {
+    async fn fetch(&self) -> Result<DistroImageList> {
         let mut links = fetch_apache_file_list(&self.version_list_url)
+            .await
             .with_context(|| "Failed to parse the version list.")?;
         links.sort_by(|a, b| a.last_modified.cmp(&b.last_modified));
         let versions: Vec<_> = links
@@ -96,13 +102,15 @@ pub struct LxdDistroVersion {
     platform_list_url: String,
 }
 
+#[async_trait]
 impl DistroImageFetcher for LxdDistroVersion {
     fn get_name(&self) -> &str {
         self.version_name.as_str()
     }
 
-    fn fetch(&self) -> Result<DistroImageList> {
+    async fn fetch(&self) -> Result<DistroImageList> {
         let mut dates = fetch_apache_file_list(&format!("{}amd64/cloud", &self.platform_list_url))
+            .await
             .with_context(|| format!("Failed to get the image for amd64/cloud. Perhaps '{}amd64/cloud' is not found?", &self.platform_list_url))?;
         dates.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
         let latest = &dates[0];
@@ -117,16 +125,19 @@ impl DistroImageFetcher for LxdDistroVersion {
     }
 }
 
-fn fetch_apache_file_list(relative_url: &str) -> Result<Vec<FileOnApache>> {
+async fn fetch_apache_file_list(relative_url: &str) -> Result<Vec<FileOnApache>> {
     let url = LINUX_CONTAINERS_ORG_BASE.to_owned() + relative_url;
     let date_selector =
         scraper::Selector::parse("body > table > tbody > tr > td:nth-child(3)").unwrap();
     let a_link_selector =
         scraper::Selector::parse("body > table > tbody > tr > td:nth-child(2) > a").unwrap();
     log::info!("Fetching from linuxcontainers.org...");
-    let apache_file_list_body = reqwest::blocking::get(&url)
+    let apache_file_list_body = reqwest::get(&url)
+        .await
         .with_context(|| format!("Failed to fetch {}", &url))?
-        .text()?;
+        .text()
+        .await
+        .with_context(|| format!("Failed to get the text of {}", &url))?;
     let doc = scraper::Html::parse_document(&apache_file_list_body);
     let dates: Vec<_> = doc.select(&date_selector).collect();
     let a_links: Vec<_> = doc.select(&a_link_selector).collect();
