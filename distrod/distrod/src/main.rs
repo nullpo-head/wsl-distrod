@@ -69,7 +69,6 @@ pub struct ExecOpts {
     uid: Option<u32>,
 
     #[structopt(short, long)]
-    #[structopt(short, long)]
     working_directory: Option<OsString>,
 
     #[structopt(short, long)]
