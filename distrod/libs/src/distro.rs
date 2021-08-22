@@ -243,11 +243,12 @@ fn setup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
     }
 
     // Put the Distrod's bin dir in PATH
-    // This allows us to hook "chsh" command to show the message to ask users to run "distrod enable" command
+    // This allows us to hook "chsh" command to show the message to ask users to run "distrod enable" command.
+    // Do nothing if the environment file has no PATH since it may affect the system path in a bad way.
     if env_file
         .get("PATH")
         .map(|path| path.contains(distrod_config::get_distrod_bin_dir_path()))
-        != Some(true)
+        == Some(false)
     {
         env_file.put(
             "PATH",
