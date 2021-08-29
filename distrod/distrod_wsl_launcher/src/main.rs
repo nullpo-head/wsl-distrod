@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use indicatif::ProgressBar;
 use libs::cli_ui::{self, build_progress_bar, LogLevel};
 use libs::cli_ui::{init_logger, prompt_string};
 use libs::distro_image::{
