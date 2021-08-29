@@ -30,7 +30,7 @@ uninstall () {
     if grep -o systemd /proc/1/status > /dev/null; then
         error "This uninstall command cannot run inside a running Distrod distro."
         error "To uninstall it, do the following first."
-        error "1. /opt/distrod/distrod disable  # Stop systemd from starting as init"
+        error "1. /opt/distrod/bin/distrod disable  # Stop systemd from starting as init"
         error "2. wsl.exe --shutdown  # Terminate WSL2"
         error "After that, Systemd will not run as the init and you can run uninstall."
         exit 1
