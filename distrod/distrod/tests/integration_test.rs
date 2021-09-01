@@ -117,22 +117,12 @@ impl Deref for DistrodInstallDir {
 
 impl Drop for DistrodInstallDir {
     fn drop(&mut self) {
-        let mut chmod = Command::new("sudo");
-        chmod
-            .args(&["chmod", "-R", "+w"])
-            .arg(self.temp_dir.path().to_str().unwrap());
-        let mut child = chmod.spawn().unwrap();
-        child.wait().unwrap();
-        let mut chown = Command::new("sudo");
-        chown
-            .args(&["chown", "-R"])
-            .arg(format!(
-                "{}:{}",
-                nix::unistd::Uid::current(),
-                nix::unistd::Uid::current()
-            ))
-            .arg(self.temp_dir.path().to_str().unwrap());
-        let mut child = chown.spawn().unwrap();
+        let mut rm = Command::new("sudo");
+        rm.args(&["sh", "-c"]).arg(format!(
+            "rm -rf {}/*",
+            self.temp_dir.path().to_str().unwrap()
+        ));
+        let mut child = rm.spawn().unwrap();
         child.wait().unwrap();
     }
 }
