@@ -31,8 +31,8 @@ sudo rm -rf /tmp/distrod_test
 mkdir -p /tmp/distrod_test/var/run/upper /tmp/distrod_test/var/run/work
 sudo mount --bind /var/run /var/run
 sudo mount -t overlay overlay -o lowerdir=/var/run,upperdir=/tmp/distrod_test/var/run/upper,workdir=/tmp/distrod_test/var/run/work /var/run
-sudo rm /var/run/distrod.json
-sudo umount /mnt/distrod_root/proc
+sudo rm -f /var/run/distrod.json
+sudo umount /mnt/distrod_root/proc || true  # may not exist
 
 # run the tests
 "$CARGO" test --verbose -p distrod
