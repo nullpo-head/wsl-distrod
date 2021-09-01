@@ -121,6 +121,7 @@ fn main() {
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
+        std::process::exit(1);
     }
 }
 
