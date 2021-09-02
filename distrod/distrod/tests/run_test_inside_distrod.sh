@@ -69,6 +69,7 @@ simulate_wsl_environment() {
 
 is_inside_wsl() {
     uname -a | grep microsoft > /dev/null
+    return $?
 }
 
 main "$@"
