@@ -14,7 +14,7 @@ distrod-bins:
 
 test-linux: lint
 	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec
-	cd distrod/distrod/tests; ./run_test_inside_distrod.sh run
+	cd distrod/distrod/tests; ./test_runner.sh run
 
 lint:
 	shellcheck install.sh
