@@ -95,6 +95,7 @@ fn get_bin_path() -> PathBuf {
 
 impl Drop for DistrodInstance {
     fn drop(&mut self) {
+        eprintln!("Stopping Didstrod");
         let mut distrod = self.new_command();
         distrod.args(&["stop", "-9"]);
         let mut child = distrod.spawn().unwrap();
