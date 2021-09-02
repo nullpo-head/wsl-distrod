@@ -77,6 +77,7 @@ impl DistrodInstance {
 
     fn new_command(&self) -> Command {
         let mut distrod = Command::new("sudo");
+        distrod.arg("-E");
         distrod.arg(self.bin_path.as_path().as_os_str());
         distrod
     }
