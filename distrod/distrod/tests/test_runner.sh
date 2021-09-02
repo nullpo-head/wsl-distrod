@@ -54,17 +54,8 @@ simulate_wsl_environment() {
     fi
     # Simulate WSL environment in non-WSL Linux environment such as in
     # GitHub action.
-    sudo touch /init
-    sudo mkdir /mnt/wsl
-    sudo mkdir /run/WSL
-
-    if [ -z "$WSL_DISTRO_NAME" ]; then
-        export WSL_DISTRO_NAME=DUMMY_DISTRO
-    fi
-
-    if [ -z "$WSL_INTEROP" ]; then
-        export WSL_INTEROP=/run/WSL/1_interop
-    fi
+    export WSL_DISTRO_NAME=DUMMY_DISTRO
+    export WSL_INTEROP=/run/WSL/1_interop
 }
 
 is_inside_wsl() {
