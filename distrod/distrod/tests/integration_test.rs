@@ -1,82 +1,44 @@
 use std::{
     fs::File,
     io::BufWriter,
-    ops::Deref,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
 };
 
 use once_cell::sync::Lazy;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::NamedTempFile;
 
-static DISTROD_BIN_PATH: Lazy<PathBuf> = Lazy::new(get_bin_path);
+static DISTROD_SETUP: Lazy<DistrodSetup> = Lazy::new(|| {
+    let distrod_install_info = DistrodSetup::new();
+    distrod_install_info.create();
+    distrod_install_info.start();
+    std::thread::sleep(Duration::from_secs(5));
+    distrod_install_info
+});
 
 #[test]
-fn integration_test() {
-    let ubuntu_image = setup_ubuntu_image();
-    let distrod_install_dir = test_create_cmd(&ubuntu_image);
-    let distrod_instance = test_start_cmd(distrod_install_dir);
-    test_exec_cmd(&distrod_instance);
-    test_init_is_sytemd(&distrod_instance);
-    test_no_systemd_unit_is_failing(&distrod_instance);
-    test_systemd_service_has_wsl_envs(&distrod_instance);
-    test_sudo_initializes_wsl_envs(&distrod_instance);
-    // test ping
-}
-
-fn test_create_cmd(image: &ImageFile) -> DistrodInstallDir {
-    let install_dir = DistrodInstallDir::new();
-
-    let mut distrod = Command::new("sudo");
-    distrod.args(&[
-        DISTROD_BIN_PATH.as_path().to_str().unwrap(),
-        "create",
-        "--image-path",
-        image.path().to_str().unwrap(),
-        "--install-dir",
-        install_dir.path().to_str().unwrap(),
-    ]);
-    let exit_status = distrod.status().unwrap();
-    assert!(exit_status.success());
-
-    install_dir
-}
-
-fn test_start_cmd(install_dir: DistrodInstallDir) -> DistrodInstance {
-    let distrod_instance = DistrodInstance::new(install_dir);
-
-    let mut distrod = distrod_instance.new_command();
-    distrod.args(&[
-        "start",
-        "--rootfs",
-        distrod_instance.install_dir.path().to_str().unwrap(),
-    ]);
-    let exit_status = distrod.status().unwrap();
-    assert!(exit_status.success());
-
-    distrod_instance
-}
-
-fn test_exec_cmd(distrod_instance: &DistrodInstance) {
-    let mut echo = distrod_instance.new_command();
+fn test_exec_cmd() {
+    let mut echo = DISTROD_SETUP.new_command();
     echo.args(&["exec", "echo", "foo"]);
     let output = echo.output().unwrap();
     assert_eq!("foo\n", String::from_utf8_lossy(&output.stdout));
 }
 
-fn test_init_is_sytemd(distrod_instance: &DistrodInstance) {
-    let mut cat = distrod_instance.new_command();
+#[test]
+fn test_init_is_sytemd() {
+    let mut cat = DISTROD_SETUP.new_command();
     cat.args(&["exec", "cat", "/proc/1/stat"]);
     let output = cat.output().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("(systemd)"));
 }
 
-fn test_no_systemd_unit_is_failing(distrod_instance: &DistrodInstance) {
+#[test]
+fn test_no_systemd_unit_is_failing() {
     let mut output = None;
     for _ in 0..10 {
         std::thread::sleep(Duration::from_secs(3));
-        let mut systemctl = distrod_instance.new_command();
+        let mut systemctl = DISTROD_SETUP.new_command();
         systemctl.args(&["exec", "systemctl", "status"]);
         output = Some(systemctl.output().unwrap());
         let o = &output.as_ref().unwrap();
@@ -100,10 +62,11 @@ fn test_no_systemd_unit_is_failing(distrod_instance: &DistrodInstance) {
     //assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("State: running"));
 }
 
-fn test_systemd_service_has_wsl_envs(distrod_instance: &DistrodInstance) {
+#[test]
+fn test_systemd_service_has_wsl_envs() {
     let mut output = None;
     for _ in 0..5 {
-        let mut cat_env = distrod_instance.new_command();
+        let mut cat_env = DISTROD_SETUP.new_command();
         cat_env.args(&["exec", "--", "bash", "-c"]);
         cat_env.arg(
             r#"
@@ -137,24 +100,50 @@ fn test_systemd_service_has_wsl_envs(distrod_instance: &DistrodInstance) {
     assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("WSL_INTEROP"));
 }
 
-fn test_sudo_initializes_wsl_envs(distrod_instance: &DistrodInstance) {
-    let mut sudo_env = distrod_instance.new_command();
+#[test]
+fn test_sudo_initializes_wsl_envs() {
+    let mut sudo_env = DISTROD_SETUP.new_command();
     sudo_env.args(&["exec", "--", "sudo", "env"]);
     let output = sudo_env.output().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("WSL_INTEROP"));
 }
 
-struct DistrodInstance {
+struct DistrodSetup {
     pub bin_path: PathBuf,
-    pub install_dir: DistrodInstallDir,
+    pub install_dir: PathBuf,
 }
 
-impl DistrodInstance {
-    fn new(install_dir: DistrodInstallDir) -> DistrodInstance {
-        DistrodInstance {
+impl DistrodSetup {
+    fn new() -> DistrodSetup {
+        DistrodSetup {
             bin_path: get_bin_path(),
-            install_dir,
+            install_dir: get_test_install_dir(),
         }
+    }
+
+    fn create(&self) {
+        let image = setup_ubuntu_image();
+        let mut distrod = self.new_command();
+        distrod.args(&[
+            "create",
+            "--image-path",
+            image.path().to_str().unwrap(),
+            "--install-dir",
+            self.install_dir.as_path().to_str().unwrap(),
+        ]);
+        let exit_status = distrod.status().unwrap();
+        assert!(exit_status.success());
+    }
+
+    fn start(&self) {
+        let mut distrod = self.new_command();
+        distrod.args(&[
+            "start",
+            "--rootfs",
+            self.install_dir.as_path().to_str().unwrap(),
+        ]);
+        let exit_status = distrod.status().unwrap();
+        assert!(exit_status.success());
     }
 
     fn new_command(&self) -> Command {
@@ -176,64 +165,12 @@ fn get_bin_path() -> PathBuf {
     pathbuf
 }
 
-impl Drop for DistrodInstance {
-    fn drop(&mut self) {
-        eprintln!("Stopping Didstrod");
-        let mut distrod = self.new_command();
-        distrod.args(&["stop", "-9"]);
-        let mut child = distrod.spawn().unwrap();
-        child.wait().unwrap();
+fn get_test_install_dir() -> PathBuf {
+    let env_by_testwrapper = std::env::var("DISTROD_INSTALL_DIR");
+    if env_by_testwrapper.is_err() {
+        panic!("The test wapper script should set DISTROD_INSTALL_DIR environment variable.");
     }
-}
-
-// DistrodInstallDir deletes the internal temp_dir after chown when it's dropped since it's owned by root
-struct DistrodInstallDir {
-    temp_dir: TempDir,
-}
-
-impl DistrodInstallDir {
-    pub fn new() -> Self {
-        let install_dir = tempfile::tempdir().unwrap();
-        let mut chown = Command::new("sudo");
-        chown.args(&["chown", "root:root", install_dir.path().to_str().unwrap()]);
-        let exit_status = chown.status().unwrap();
-        assert!(exit_status.success());
-
-        DistrodInstallDir {
-            temp_dir: install_dir,
-        }
-    }
-}
-
-impl Deref for DistrodInstallDir {
-    type Target = TempDir;
-
-    fn deref(&self) -> &Self::Target {
-        &self.temp_dir
-    }
-}
-
-impl Drop for DistrodInstallDir {
-    fn drop(&mut self) {
-        let mut chown = Command::new("sudo");
-        chown.arg("chown");
-        chown.arg(format!(
-            "{}:{}",
-            nix::unistd::Uid::current().as_raw(),
-            nix::unistd::Gid::current().as_raw(),
-        ));
-        chown.arg(self.temp_dir.path().to_str().unwrap());
-        let mut child = chown.spawn().unwrap();
-        child.wait().unwrap();
-
-        let mut rm = Command::new("sudo");
-        rm.args(&["sh", "-c"]).arg(format!(
-            "rm -rf {}/*",
-            self.temp_dir.path().to_str().unwrap()
-        ));
-        let mut child = rm.spawn().unwrap();
-        child.wait().unwrap();
-    }
+    PathBuf::from(env_by_testwrapper.unwrap())
 }
 
 fn setup_ubuntu_image() -> ImageFile {

@@ -28,9 +28,20 @@ main () {
 
     prepare_for_nested_distrod
     simulate_wsl_environment
+    make_rootfs_dir
+    DISTROD_INSTALL_DIR="$RET"
 
     # run the tests
+    export DISTROD_INSTALL_DIR
+    set +e
     "$CARGO" test --verbose -p distrod
+    EXIT_CODE=$?
+    set -e
+
+    kill_distrod
+    remove_rootfs_dir "$DISTROD_INSTALL_DIR"
+
+    exit $EXIT_CODE
 }
 
 prepare_for_nested_distrod() {
@@ -49,9 +60,6 @@ prepare_for_nested_distrod() {
 }
 
 simulate_wsl_environment() {
-    if is_inside_wsl; then
-        return
-    fi
     # Simulate WSL environment in non-WSL Linux environment such as in
     # GitHub action.
     export WSL_DISTRO_NAME=DUMMY_DISTRO
@@ -61,6 +69,20 @@ simulate_wsl_environment() {
 is_inside_wsl() {
     uname -a | grep microsoft > /dev/null
     return $?
+}
+
+make_rootfs_dir() {
+    RET="$(mktemp -d)"
+    chmod 755 "$RET"
+    sudo chown root:root "$RET"
+}
+
+kill_distrod() {
+    sudo "$(dirname "$0")"/../../target/debug/distrod stop -9
+}
+
+remove_rootfs_dir() {
+    sudo rm -rf "$1"
 }
 
 main "$@"
