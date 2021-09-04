@@ -474,7 +474,11 @@ fn umount_host_mountpoints<P: AsRef<Path>>(
         }
         let err = nix::mount::umount(mount_path.as_path());
         if err.is_err() {
-            log::warn!("Failed to unmount '{:?}'", mount_path.as_path());
+            log::warn!(
+                "Failed to unmount '{:?}'. {}",
+                mount_path.as_path(),
+                err.unwrap_err()
+            );
         }
     }
     Ok(())
