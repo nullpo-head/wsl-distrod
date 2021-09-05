@@ -198,7 +198,7 @@ fn get_test_install_dir() -> PathBuf {
 }
 
 fn setup_ubuntu_image() -> ImageFile {
-    let local_cache_path = PathBuf::from("/tmp/integration_test.tar.xz");
+    let local_cache_path = PathBuf::from("/tmp/integration_test_rootfs.tar.xz");
     if local_cache_path.exists() {
         let file = File::open(&local_cache_path).unwrap();
         let cache_file = ImageFile::File(local_cache_path, file);

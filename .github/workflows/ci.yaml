@@ -27,6 +27,11 @@ jobs:
             ~/.cargo/git
             distrod/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/cache@v2
+        with:
+          path: |
+            /tmp/**/integration_test_rootfs.tar.xz
+          key: ${{ runner.os }}-test-images
 
       - name: Run tests
         run: make test-linux
