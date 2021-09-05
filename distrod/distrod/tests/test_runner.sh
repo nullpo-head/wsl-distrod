@@ -25,6 +25,9 @@ main () {
     else
         sudo mount -t proc none /proc  # Make it see the new PIDs
     fi
+    ##
+    # From here, this script runs in the new mount and PID namespace
+    ##
 
     if [ -z "$3" ]; then
         echo "Error: Internal usage: $0 $COMMAND --unshared path_to_cargo" >&2
@@ -37,6 +40,9 @@ main () {
     NS="itestns"
     remove_pseudo_wsl_netns "$NS"  # delete netns and interfaces if there is existing ones
     create_pseudo_wsl_netns "$NS"
+    # Use 8.8.8.8 as the name server. Because the cargo runs in the new netns,
+    # it cannot refer to the host's name server anymore.
+    set_name_server_to_public_dns
     make_rootfs_dir
     DISTROD_INSTALL_DIR="$RET"
 
@@ -160,6 +166,14 @@ set_link_name_variables() {
         echo "NS_NAME must be shorter so that INTERFACE_GUEST becomes shorter than 16 characters." >&2
         return 1
     fi
+}
+
+set_name_server_to_public_dns() {
+    cat  > /tmp/resolv.conf <<EOF
+nameserver 8.8.8.8
+options single-request
+EOF
+    sudo mount --bind /tmp/resolv.conf /etc/resolv.conf
 }
 
 is_inside_wsl() {
