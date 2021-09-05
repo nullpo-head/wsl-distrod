@@ -108,6 +108,30 @@ fn test_sudo_initializes_wsl_envs() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("WSL_INTEROP"));
 }
 
+#[test]
+fn test_global_ip_is_reachable() {
+    // Skip for now until we change the image from Canonical's to LXD's.
+    return;
+    // Wait for a while because Systemd may break the network only after some delay.
+    std::thread::sleep(Duration::from_secs(15));
+    let mut ping = DISTROD_SETUP.new_command();
+    ping.args(&["exec", "--", "ping", "-c", "10", "8.8.8.8"]);
+    let child = ping.status().unwrap();
+    assert!(child.success());
+}
+
+#[test]
+fn test_name_can_be_resolved() {
+    // Wait for a while because Systemd may break the network only after some delay.
+    std::thread::sleep(Duration::from_secs(15));
+    let mut ping = DISTROD_SETUP.new_command();
+    //ping.args(&["exec", "--", "ping", "-c", "10", "www.google.com"]);
+    // Use apt for now until we change the image from Canonical's to LXD's.
+    ping.args(&["exec", "--", "apt", "update"]);
+    let child = ping.status().unwrap();
+    assert!(child.success());
+}
+
 struct DistrodSetup {
     pub bin_path: PathBuf,
     pub install_dir: PathBuf,
