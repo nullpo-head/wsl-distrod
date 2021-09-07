@@ -1,6 +1,6 @@
 use std::{fs::File, io::BufWriter, path::PathBuf, process::Command, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use libs::{
     cli_ui::build_progress_bar,
     distro_image::{
@@ -43,6 +43,7 @@ fn test_no_systemd_unit_is_failing() {
         let mut systemctl = DISTROD_SETUP.new_command();
         systemctl.args(&["exec", "systemctl", "status"]);
         output = Some(systemctl.output().unwrap());
+
         let o = &output.as_ref().unwrap();
         eprintln!(
             "Querying systemctl's status. stdout: '{}', stderr: '{}'",
@@ -53,6 +54,7 @@ fn test_no_systemd_unit_is_failing() {
                 .join("\n"),
             String::from_utf8_lossy(&o.stderr)
         );
+
         if !String::from_utf8_lossy(&output.as_ref().unwrap().stdout).contains("State:") {
             continue;
         }
@@ -60,7 +62,40 @@ fn test_no_systemd_unit_is_failing() {
             break;
         }
     }
+    // Output debug information for the case that the test fails.
+    show_debug_systemd_info();
     assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("State: running"));
+}
+
+fn show_debug_systemd_info() {
+    let inner = || -> Result<()> {
+        let mut ip = DISTROD_SETUP.new_command();
+        ip.args(&["exec", "systemctl", "status"]);
+        let output = ip.output().with_context(|| "Failed to run systemctl.")?;
+        eprintln!(
+            "$ systemctl status => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut ip = DISTROD_SETUP.new_command();
+        ip.args(&["exec", "--", "systemctl", "--failed"]);
+        let output = ip.output().with_context(|| "Failed to run ip.")?;
+        eprintln!(
+            "$ systemctl --failed => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Ok(())
+    };
+    if let Err(e) = inner() {
+        eprintln!("{}", e);
+    }
 }
 
 #[test]
@@ -113,6 +148,10 @@ fn test_sudo_initializes_wsl_envs() {
 fn test_global_ip_is_reachable() {
     // Skip for now until we change the image from Canonical's to LXD's.
     std::thread::sleep(Duration::from_secs(15));
+
+    // Output debug information for the case that the test fails.
+    show_debug_ip_info();
+
     let mut ping = DISTROD_SETUP.new_command();
     ping.args(&["exec", "--", "ping", "-c", "10", "8.8.8.8"]);
     let child = ping.status().unwrap();
@@ -123,10 +162,41 @@ fn test_global_ip_is_reachable() {
 fn test_name_can_be_resolved() {
     // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(15));
+
+    // Output debug information for the case that the test fails.
+    show_debug_ip_info();
+
     let mut ping = DISTROD_SETUP.new_command();
     ping.args(&["exec", "--", "ping", "-c", "10", "www.google.com"]);
     let child = ping.status().unwrap();
     assert!(child.success());
+}
+
+fn show_debug_ip_info() {
+    let inner = || -> Result<()> {
+        let mut ip = DISTROD_SETUP.new_command();
+        ip.args(&["exec", "ip", "a"]);
+        let output = ip.output().with_context(|| "Failed to run ip.")?;
+        eprintln!(
+            "$ ip a => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut ip = DISTROD_SETUP.new_command();
+        ip.args(&["exec", "ip", "route", "show"]);
+        let output = ip.output().with_context(|| "Failed to run ip.")?;
+        eprintln!(
+            "$ ip route show => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Ok(())
+    };
+    if let Err(e) = inner() {
+        eprintln!("{}", e);
+    }
 }
 
 struct DistrodSetup {
