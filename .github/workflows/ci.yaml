@@ -30,11 +30,13 @@ jobs:
       - uses: actions/cache@v2
         with:
           path: |
-            /tmp/**/integration_test_rootfs.tar.xz
+            ~/.distrod_integration_test/image_cache/**/*.tar.xz
           key: ${{ runner.os }}-test-images
 
       - name: Run tests
-        run: make test-linux
+        run: DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
+             DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
+             make test-linux
 
   ci-on-windows:
     name: CI on Windows

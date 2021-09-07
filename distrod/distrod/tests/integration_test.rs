@@ -1,16 +1,18 @@
-use std::{
-    fs::File,
-    io::BufWriter,
-    path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
-};
+use std::{fs::File, io::BufWriter, path::PathBuf, process::Command, time::Duration};
 
+use anyhow::Result;
+use libs::{
+    cli_ui::build_progress_bar,
+    distro_image::{
+        download_file_with_progress, DefaultImageFetcher, DistroImage, DistroImageFetcher,
+        DistroImageFile, DistroImageList,
+    },
+    lxd_image::fetch_lxd_image,
+};
 use once_cell::sync::Lazy;
-use tempfile::NamedTempFile;
 
 static DISTROD_SETUP: Lazy<DistrodSetup> = Lazy::new(|| {
-    let distrod_install_info = DistrodSetup::new();
+    let distrod_install_info = DistrodSetup::new("ubuntu");
     distrod_install_info.create();
     distrod_install_info.start();
     std::thread::sleep(Duration::from_secs(5));
@@ -58,8 +60,7 @@ fn test_no_systemd_unit_is_failing() {
             break;
         }
     }
-    // Commenting out because it's difficult to make it pass right now.
-    //assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("State: running"));
+    assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("State: running"));
 }
 
 #[test]
@@ -111,8 +112,6 @@ fn test_sudo_initializes_wsl_envs() {
 #[test]
 fn test_global_ip_is_reachable() {
     // Skip for now until we change the image from Canonical's to LXD's.
-    return;
-    // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(15));
     let mut ping = DISTROD_SETUP.new_command();
     ping.args(&["exec", "--", "ping", "-c", "10", "8.8.8.8"]);
@@ -125,33 +124,33 @@ fn test_name_can_be_resolved() {
     // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(15));
     let mut ping = DISTROD_SETUP.new_command();
-    //ping.args(&["exec", "--", "ping", "-c", "10", "www.google.com"]);
-    // Use apt for now until we change the image from Canonical's to LXD's.
-    ping.args(&["exec", "--", "apt", "update"]);
+    ping.args(&["exec", "--", "ping", "-c", "10", "www.google.com"]);
     let child = ping.status().unwrap();
     assert!(child.success());
 }
 
 struct DistrodSetup {
-    pub bin_path: PathBuf,
-    pub install_dir: PathBuf,
+    name: String,
+    bin_path: PathBuf,
+    install_dir: PathBuf,
 }
 
 impl DistrodSetup {
-    fn new() -> DistrodSetup {
+    fn new(name: &str) -> DistrodSetup {
         DistrodSetup {
+            name: name.to_owned(),
             bin_path: get_bin_path(),
             install_dir: get_test_install_dir(),
         }
     }
 
     fn create(&self) {
-        let image = setup_ubuntu_image();
+        let image = setup_distro_image(&self.name);
         let mut distrod = self.new_command();
         distrod.args(&[
             "create",
             "--image-path",
-            image.path().to_str().unwrap(),
+            image.to_str().unwrap(),
             "--install-dir",
             self.install_dir.as_path().to_str().unwrap(),
         ]);
@@ -197,42 +196,78 @@ fn get_test_install_dir() -> PathBuf {
     PathBuf::from(env_by_testwrapper.unwrap())
 }
 
-fn setup_ubuntu_image() -> ImageFile {
-    let local_cache_path = PathBuf::from("/tmp/integration_test_rootfs.tar.xz");
+#[tokio::main]
+async fn setup_distro_image(distro_name: &str) -> PathBuf {
+    let local_cache_path = PathBuf::from(format!(
+        "{}/{}/rootfs.tar.xz",
+        get_image_download_dir(),
+        distro_name
+    ));
     if local_cache_path.exists() {
-        let file = File::open(&local_cache_path).unwrap();
-        let cache_file = ImageFile::File(local_cache_path, file);
-        return cache_file;
+        return local_cache_path;
     }
 
-    let tempfile = tempfile::NamedTempFile::new().unwrap();
-    let mut tar_xz = BufWriter::new(tempfile);
+    let local_cache_dir = local_cache_path.parent().unwrap();
+    if !local_cache_dir.exists() {
+        std::fs::create_dir_all(&local_cache_dir).unwrap();
+    }
+    let local_cache = File::create(&local_cache_path).unwrap();
+    let mut tar_xz = BufWriter::new(local_cache);
 
-    let client = reqwest::blocking::Client::builder();
-    let client = client
-        .connect_timeout(Duration::from_secs(180))
-        .build()
-        .unwrap();
-
-    let mut response = client.get("https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64-root.tar.xz").send().unwrap();
-    response.copy_to(&mut tar_xz).unwrap();
-
-    let tempfile = tar_xz.into_inner().unwrap();
-    std::fs::copy(tempfile.path(), &local_cache_path).unwrap();
-
-    ImageFile::NamedTempFile(tempfile)
-}
-
-enum ImageFile {
-    File(PathBuf, File),
-    NamedTempFile(NamedTempFile),
-}
-
-impl ImageFile {
-    pub fn path(&self) -> &Path {
-        match *self {
-            ImageFile::File(ref path, _) => path.as_path(),
-            ImageFile::NamedTempFile(ref file) => file.path(),
+    let distro_image = fetch_lxd_image_by_distro_name(distro_name.to_owned()).await;
+    match distro_image.image {
+        DistroImageFile::Local(_) => {
+            panic!("The image file should not be a local file");
+        }
+        DistroImageFile::Url(url) => {
+            log::info!("Downloading '{}'...", url);
+            download_file_with_progress(&url, build_progress_bar, &mut tar_xz)
+                .await
+                .unwrap();
+            log::info!("Download done.");
         }
     }
+
+    local_cache_path
+}
+
+fn get_image_download_dir() -> String {
+    let env_by_testwrapper = std::env::var("DISTROD_IMAGE_CACHE_DIR");
+    if env_by_testwrapper.is_err() {
+        panic!("The test wapper script should set DISTROD_IMAGE_CACHE_DIR environment variable.");
+    }
+    env_by_testwrapper.unwrap()
+}
+
+async fn fetch_lxd_image_by_distro_name(distro_name: String) -> DistroImage {
+    let choose_lxd_image_by_distro_name =
+        move |list: DistroImageList| -> Result<Box<dyn DistroImageFetcher>> {
+            match list {
+                DistroImageList::Fetcher(_, fetchers, default) => {
+                    let distro_by_name = fetchers
+                        .iter()
+                        .find(|fetcher| fetcher.get_name() == distro_name);
+                    if distro_by_name.is_some() {
+                        return Ok(fetchers
+                            .into_iter()
+                            .find(|fetcher| fetcher.get_name() == distro_name)
+                            .unwrap());
+                    }
+                    let default = match default {
+                        DefaultImageFetcher::Index(index) => fetchers[index].get_name().to_owned(),
+                        DefaultImageFetcher::Name(name) => name,
+                    };
+                    Ok(fetchers
+                        .into_iter()
+                        .find(|fetcher| fetcher.get_name() == default)
+                        .unwrap())
+                }
+                DistroImageList::Image(_) => {
+                    panic!("unreachable");
+                }
+            }
+        };
+    fetch_lxd_image(&choose_lxd_image_by_distro_name)
+        .await
+        .unwrap()
 }

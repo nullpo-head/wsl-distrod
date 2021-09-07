@@ -43,11 +43,13 @@ main () {
     # Use 8.8.8.8 as the name server. Because the cargo runs in the new netns,
     # it cannot refer to the host's name server anymore.
     set_name_server_to_public_dns
-    make_rootfs_dir
-    DISTROD_INSTALL_DIR="$RET"
+    DISTROD_INSTALL_DIR="${DISTROD_INSTALL_DIR:-"$(mktemp -d)"}"
+    make_rootfs_dir "$DISTROD_INSTALL_DIR"
 
-    # run the tests
+    # Export environment variables the integration test expects the runner to set
     export DISTROD_INSTALL_DIR
+    export DISTROD_IMAGE_CACHE_DIR=${DISTROD_IMAGE_CACHE_DIR:-"/tmp/distrod_integration_test"}
+    # run the tests
     set +e
     case "$COMMAND" in
     run)
@@ -182,9 +184,9 @@ is_inside_wsl() {
 }
 
 make_rootfs_dir() {
-    RET="$(mktemp -d)"
-    chmod 755 "$RET"
-    sudo chown root:root "$RET"
+    mkdir -p "$1"
+    chmod 755 "$1"
+    sudo chown root:root "$1"
 }
 
 kill_distrod() {
