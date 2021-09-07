@@ -34,9 +34,10 @@ jobs:
           key: ${{ runner.os }}-test-images
 
       - name: Run tests
-        run: DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
-             DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
-             make test-linux
+        run: |
+          DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
+          DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
+          make test-linux
 
   ci-on-windows:
     name: CI on Windows
