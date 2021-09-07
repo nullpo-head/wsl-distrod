@@ -69,9 +69,11 @@ fn test_no_systemd_unit_is_failing() {
 
 fn show_debug_systemd_info() {
     let inner = || -> Result<()> {
-        let mut ip = DISTROD_SETUP.new_command();
-        ip.args(&["exec", "systemctl", "status"]);
-        let output = ip.output().with_context(|| "Failed to run systemctl.")?;
+        let mut systemctl = DISTROD_SETUP.new_command();
+        systemctl.args(&["exec", "systemctl", "status"]);
+        let output = systemctl
+            .output()
+            .with_context(|| "Failed to run systemctl.")?;
         eprintln!(
             "$ systemctl status => \n{}\n{}",
             String::from_utf8_lossy(&output.stdout)
@@ -82,11 +84,26 @@ fn show_debug_systemd_info() {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let mut ip = DISTROD_SETUP.new_command();
-        ip.args(&["exec", "--", "systemctl", "--failed"]);
-        let output = ip.output().with_context(|| "Failed to run ip.")?;
+        let mut systemctl = DISTROD_SETUP.new_command();
+        systemctl.args(&["exec", "--", "systemctl", "--failed"]);
+        let output = systemctl.output().with_context(|| "Failed to run ip.")?;
         eprintln!(
             "$ systemctl --failed => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut bash = DISTROD_SETUP.new_command();
+        bash.args(&[
+            "exec",
+            "--",
+            "bash",
+            "-c",
+            "for u in $(systemctl --failed | grep failed | awk '{print $2}'); do journalctl -u \"$u\" | cat; done",
+        ]);
+        let output = bash.output().with_context(|| "Failed to run ip.")?;
+        eprintln!(
+            "journalctl => \n{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -188,6 +205,15 @@ fn show_debug_ip_info() {
         let output = ip.output().with_context(|| "Failed to run ip.")?;
         eprintln!(
             "$ ip route show => \n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut ping = DISTROD_SETUP.new_command();
+        ping.args(&["exec", "--", "ping", "-c", "1", "192.168.99.1"]); // 192.168.99.1 is the IP of the host ns.
+        let output = ip.output().with_context(|| "Failed to run ping.")?;
+        eprintln!(
+            "$ ping 192.168.99.1 => \n{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

@@ -65,6 +65,9 @@ main () {
 
     kill_distrod || true
     remove_rootfs_dir "$DISTROD_INSTALL_DIR" || true
+    if [ "$EXIT_CODE" != 0 ]; then
+        show_iptables_debug_info
+    fi
     remove_pseudo_wsl_netns "$NS" || true
 
     exit $EXIT_CODE
@@ -154,6 +157,13 @@ remove_pseudo_wsl_netns() {
 
     # Set up a NAT
     sudo iptables -t nat -D POSTROUTING -s "${SUBNET}.0/24" -j MASQUERADE > /dev/null 2>&1 || true
+}
+
+show_iptables_debug_info() {
+    set -x
+    sudo iptables -t nat -nvL POSTROUTING --line-number
+    sudo iptables -nvL FORWARD --line-number
+    set +x
 }
 
 set_link_name_variables() {
