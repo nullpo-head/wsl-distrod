@@ -233,14 +233,14 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
     let image = match opts.image_path {
         None => {
             let local_image_fetcher =
-                || Ok(Box::new(LocalDistroImage::new(prompt_path)) as Box<dyn DistroImageFetcher>);
+                || Ok(Box::new(LocalDistroImage::new(&prompt_path)) as Box<dyn DistroImageFetcher>);
             let lxd_image_fetcher =
                 || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
             let fetchers = vec![
                 Box::new(local_image_fetcher) as DistroImageFetcherGen,
                 Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
             ];
-            distro_image::fetch_image(fetchers, choose_from_list, 1)
+            distro_image::fetch_image(fetchers, &choose_from_list, 1)
                 .await
                 .with_context(|| "Failed to fetch the image list.")?
         }

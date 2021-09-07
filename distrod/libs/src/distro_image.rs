@@ -3,8 +3,9 @@ use std::ffi::OsString;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-pub type ListChooseFn = fn(list: DistroImageList) -> Result<Box<dyn DistroImageFetcher>>;
-pub type PromptPath = fn(message: &str, default: Option<&str>) -> Result<OsString>;
+pub type ListChooseFn<'a> =
+    &'a (dyn Fn(DistroImageList) -> Result<Box<dyn DistroImageFetcher>> + Send + Sync);
+pub type PromptPath<'a> = &'a (dyn Fn(&str, Option<&str>) -> Result<OsString> + Send + Sync);
 
 #[async_trait]
 pub trait DistroImageFetcher {
@@ -43,7 +44,7 @@ pub type DistroImageFetcherGen = Box<dyn Fn() -> Result<Box<dyn DistroImageFetch
 
 pub async fn fetch_image(
     fetchers: Vec<DistroImageFetcherGen>,
-    choose_from_list: ListChooseFn,
+    choose_from_list: ListChooseFn<'_>,
     default_index: usize,
 ) -> Result<DistroImage> {
     let mut distro_image_list = Box::new(DistroImageFetchersList {

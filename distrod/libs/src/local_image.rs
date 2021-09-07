@@ -7,11 +7,11 @@ use crate::distro_image::{
 use anyhow::Result;
 
 pub struct LocalDistroImage {
-    prompt_path: PromptPath,
+    prompt_path: PromptPath<'static>,
 }
 
 impl LocalDistroImage {
-    pub fn new(prompt_path: PromptPath) -> LocalDistroImage {
+    pub fn new(prompt_path: PromptPath<'static>) -> LocalDistroImage {
         LocalDistroImage { prompt_path }
     }
 }

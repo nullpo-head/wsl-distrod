@@ -8,7 +8,7 @@ use chrono::NaiveDateTime;
 
 static LINUX_CONTAINERS_ORG_BASE: &str = "https://uk.images.linuxcontainers.org/";
 
-pub async fn fetch_lxd_image(choose_from_list: ListChooseFn) -> Result<DistroImage> {
+pub async fn fetch_lxd_image(choose_from_list: ListChooseFn<'_>) -> Result<DistroImage> {
     let mut distro_image_list = Box::new(LxdDistroImageList {}) as Box<dyn DistroImageFetcher>;
     loop {
         let fetched_image_list = distro_image_list.fetch().await?;

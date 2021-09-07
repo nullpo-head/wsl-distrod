@@ -210,14 +210,14 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
 
 async fn fetch_distro_image() -> Result<Box<dyn Read>> {
     let local_image_fetcher =
-        || Ok(Box::new(LocalDistroImage::new(cli_ui::prompt_path)) as Box<dyn DistroImageFetcher>);
+        || Ok(Box::new(LocalDistroImage::new(&cli_ui::prompt_path)) as Box<dyn DistroImageFetcher>);
     let lxd_image_fetcher =
         || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
     let fetchers = vec![
         Box::new(local_image_fetcher) as DistroImageFetcherGen,
         Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
     ];
-    let image = distro_image::fetch_image(fetchers, cli_ui::choose_from_list, 1)
+    let image = distro_image::fetch_image(fetchers, &cli_ui::choose_from_list, 1)
         .await
         .with_context(|| "Failed to fetch the image list.")?;
     match image.image {
