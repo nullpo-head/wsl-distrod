@@ -235,8 +235,8 @@ impl DistrodSetup {
     fn new(name: &str) -> DistrodSetup {
         DistrodSetup {
             name: name.to_owned(),
-            bin_path: get_bin_path(),
-            install_dir: get_test_install_dir(),
+            bin_path: TestEnvironment::distrod_bin_path(),
+            install_dir: TestEnvironment::install_dir(),
         }
     }
 
@@ -273,32 +273,10 @@ impl DistrodSetup {
     }
 }
 
-fn get_bin_path() -> PathBuf {
-    let mut pathbuf = std::env::current_exe().unwrap();
-    pathbuf.pop();
-    // https://github.com/rust-lang/cargo/issues/5758
-    if pathbuf.ends_with("deps") {
-        pathbuf.pop();
-    }
-    pathbuf.push("distrod");
-    pathbuf
-}
-
-fn get_test_install_dir() -> PathBuf {
-    let env_by_testwrapper = std::env::var("DISTROD_INSTALL_DIR");
-    if env_by_testwrapper.is_err() {
-        panic!("The test wapper script should set DISTROD_INSTALL_DIR environment variable.");
-    }
-    PathBuf::from(env_by_testwrapper.unwrap())
-}
-
 #[tokio::main]
 async fn setup_distro_image(distro_name: &str) -> PathBuf {
-    let local_cache_path = PathBuf::from(format!(
-        "{}/{}/rootfs.tar.xz",
-        get_image_download_dir(),
-        distro_name
-    ));
+    let local_cache_path =
+        TestEnvironment::image_cache_dir().join(&format!("{}/rootfs.tar.xz", distro_name));
     if local_cache_path.exists() {
         return local_cache_path;
     }
@@ -325,14 +303,6 @@ async fn setup_distro_image(distro_name: &str) -> PathBuf {
     }
 
     local_cache_path
-}
-
-fn get_image_download_dir() -> String {
-    let env_by_testwrapper = std::env::var("DISTROD_IMAGE_CACHE_DIR");
-    if env_by_testwrapper.is_err() {
-        panic!("The test wapper script should set DISTROD_IMAGE_CACHE_DIR environment variable.");
-    }
-    env_by_testwrapper.unwrap()
 }
 
 async fn fetch_lxd_image_by_distro_name(distro_name: String) -> DistroImage {
@@ -366,4 +336,38 @@ async fn fetch_lxd_image_by_distro_name(distro_name: String) -> DistroImage {
     fetch_lxd_image(&choose_lxd_image_by_distro_name)
         .await
         .unwrap()
+}
+
+struct TestEnvironment;
+
+impl TestEnvironment {
+    pub fn distrod_bin_path() -> PathBuf {
+        let mut pathbuf = std::env::current_exe().unwrap();
+        pathbuf.pop();
+        // https://github.com/rust-lang/cargo/issues/5758
+        if pathbuf.ends_with("deps") {
+            pathbuf.pop();
+        }
+        pathbuf.push("distrod");
+        pathbuf
+    }
+
+    pub fn install_dir() -> PathBuf {
+        PathBuf::from(TestEnvironment::_get_var("DISTROD_INSTALL_DIR"))
+    }
+
+    pub fn image_cache_dir() -> PathBuf {
+        PathBuf::from(TestEnvironment::_get_var("DISTROD_IMAGE_CACHE_DIR"))
+    }
+
+    fn _get_var(var_name: &str) -> String {
+        let env_by_testwrapper = std::env::var(var_name);
+        if env_by_testwrapper.is_err() {
+            panic!(
+                "The test wapper script should set {} environment variable.",
+                var_name
+            );
+        }
+        env_by_testwrapper.unwrap()
+    }
 }
