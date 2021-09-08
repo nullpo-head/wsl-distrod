@@ -163,15 +163,23 @@ fn test_sudo_initializes_wsl_envs() {
 
 #[test]
 fn test_global_ip_is_reachable() {
-    // Skip for now until we change the image from Canonical's to LXD's.
+    // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(15));
 
     // Output debug information for the case that the test fails.
     show_debug_ip_info();
 
-    let mut ping = DISTROD_SETUP.new_command();
-    ping.args(&["exec", "--", "ping", "-c", "10", "8.8.8.8"]);
-    let child = ping.status().unwrap();
+    // Use Python instead of simple ping because ping does not work on GitHub Actions.
+    let mut sh = DISTROD_SETUP.new_command();
+    sh.args(&["exec", "--", "sh", "-c"]);
+    sh.arg(format!(
+        "python3 -c '{}'",
+        gen_connection_check_python_script(&format!(
+            "http://{}",
+            &TestEnvironment::ip_addr_for_connection_test()
+        ))
+    ));
+    let child = sh.status().unwrap();
     assert!(child.success());
 }
 
@@ -183,9 +191,14 @@ fn test_name_can_be_resolved() {
     // Output debug information for the case that the test fails.
     show_debug_ip_info();
 
-    let mut ping = DISTROD_SETUP.new_command();
-    ping.args(&["exec", "--", "ping", "-c", "10", "www.google.com"]);
-    let child = ping.status().unwrap();
+    // Use Python instead of simple ping because ping does not work on GitHub Actions.
+    let mut sh = DISTROD_SETUP.new_command();
+    sh.args(&["exec", "--", "sh", "-c"]);
+    sh.arg(format!(
+        "python3 -c '{}'",
+        gen_connection_check_python_script("https://www.google.com")
+    ));
+    let child = sh.status().unwrap();
     assert!(child.success());
 }
 
@@ -223,6 +236,16 @@ fn show_debug_ip_info() {
     if let Err(e) = inner() {
         eprintln!("{}", e);
     }
+}
+
+fn gen_connection_check_python_script(uri: &str) -> String {
+    format!(
+        "import urllib.request\n\
+         import sys\n\
+         res = urllib.request.urlopen(\"{}\")\n\
+         sys.exit(0 if res.read() is not None else 1)",
+        uri
+    )
 }
 
 struct DistrodSetup {
@@ -358,6 +381,10 @@ impl TestEnvironment {
 
     pub fn image_cache_dir() -> PathBuf {
         PathBuf::from(TestEnvironment::_get_var("DISTROD_IMAGE_CACHE_DIR"))
+    }
+
+    pub fn ip_addr_for_connection_test() -> String {
+        TestEnvironment::_get_var("RELIABLE_CONNECTION_IP_ADDRESS")
     }
 
     fn _get_var(var_name: &str) -> String {

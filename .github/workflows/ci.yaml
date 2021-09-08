@@ -33,6 +33,11 @@ jobs:
             ~/.distrod_integration_test/image_cache/**/*.tar.xz
           key: ${{ runner.os }}-test-images
 
+      - name: Install dnsutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsutils
+
       - name: Run tests
         run: |
           DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
