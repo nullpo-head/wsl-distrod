@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Context, Result};
-use distro::Distro;
 use libs::cli_ui::{build_progress_bar, choose_from_list, init_logger, prompt_path, LogLevel};
 use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
@@ -13,7 +12,7 @@ use structopt::StructOpt;
 use xz2::read::XzDecoder;
 
 use libs::command_alias::CommandAlias;
-use libs::distro;
+use libs::distro::{self, DistroLauncher};
 use libs::distro_image::{
     self, download_file_with_progress, DistroImage, DistroImageFetcher, DistroImageFetcherGen,
     DistroImageFile,
@@ -298,32 +297,28 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
 }
 
 fn launch_distro(opts: StartOpts) -> Result<()> {
-    if Distro::is_inside_running_distro()
-        || Distro::get_running_distro()
+    if distro::is_inside_running_distro()
+        || DistroLauncher::get_running_distro()
             .with_context(|| "Failed to see if there's a running distro.")?
             .is_some()
     {
         bail!("There is already a running distro.");
     }
-    let distro =
-        Distro::get_installed_distro(Some(&opts.rootfs.as_ref().unwrap_or(&OsString::from("/"))))
-            .with_context(|| "Failed to retrieve the installed distro.")?;
-    if distro.is_none() {
-        bail!(
-            "Any distribution is not installed in '{:?}' for Distrod.",
-            &opts.rootfs
-        )
+    let mut distro_launcher = DistroLauncher::default();
+    if let Some(rootfs) = opts.rootfs {
+        distro_launcher.with_rootfs(rootfs);
+    } else {
+        distro_launcher.from_default_distro().with_context(|| "Failed to get the default distro.")?;
     }
-
-    let mut distro = distro.unwrap();
-    distro
+    distro_launcher
         .launch()
-        .with_context(|| "Failed to launch the distro.")
+        .with_context(|| "Failed to launch the distro.")?;
+    Ok(())
 }
 
 fn exec_command(opts: ExecOpts) -> Result<()> {
     let distro =
-        Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+        DistroLauncher::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         if let Some(ref rootfs) = opts.rootfs {
             launch_distro(StartOpts {
@@ -377,7 +372,7 @@ fn get_credential<P: AsRef<Path>>(
 
 fn stop_distro(opts: StopOpts) -> Result<()> {
     let distro =
-        Distro::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+        DistroLauncher::get_running_distro().with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         bail!("No distro is currently running.");
     }

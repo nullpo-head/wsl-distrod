@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use nix::sched::CloneFlags;
 use nix::unistd::{chown, Gid, Uid};
 use nix::NixPath;
@@ -6,6 +6,7 @@ use passfd::FdPassingExt;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
+use std::ops::{Deref, DerefMut};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::prelude::OsStrExt;
@@ -18,27 +19,18 @@ use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 use crate::wsl_interop::collect_wsl_env_vars;
 
-#[non_exhaustive]
-pub struct Container {
-    pub init_pid: Option<u32>,
-    init_procfile: Option<ProcFile>,
-}
+#[derive(Default, Clone)]
+pub struct ContainerLauncher;
 
-impl Container {
+impl ContainerLauncher {
     pub fn new() -> Self {
-        Container {
-            init_pid: None,
-            init_procfile: None,
-        }
+        ContainerLauncher::default()
     }
 
-    pub fn from_pid(pid: u32) -> Result<Self> {
-        let procfile = ProcFile::from_pid(pid)?;
-        if procfile.is_none() {
-            bail!("The given pid does not exist");
-        }
+    pub fn from_pid(pid: u32) -> Result<Container> {
+        let procfile = ProcFile::from_pid(pid)?.ok_or_else(|| anyhow!("The given PID does not exist."))?;
         Ok(Container {
-            init_pid: Some(pid),
+            init_pid: pid,
             init_procfile: procfile,
         })
     }
@@ -48,7 +40,7 @@ impl Container {
         init: Option<Vec<OsString>>,
         rootfs: P1,
         old_root: P2,
-    ) -> Result<()>
+    ) -> Result<Container>
     where
         P1: AsRef<Path>,
         P2: AsRef<Path>,
@@ -103,24 +95,30 @@ impl Container {
             .recv_fd()
             .with_context(|| "Failed to do recv_fd.")?;
         let mut procfile = unsafe { ProcFile::from_raw_fd(procfile_fd) };
-        self.init_pid = Some(
-            procfile
-                .pid()
-                .with_context(|| "Failed to get the pid of init.")?,
-        );
-        self.init_procfile = Some(procfile);
-        Ok(())
+        let init_pid = procfile
+            .pid()
+            .with_context(|| "Failed to get the pid of init.")?;
+        let init_procfile = procfile;
+        Ok(Container {
+            init_pid,
+            init_procfile,
+        })
     }
+}
 
+#[non_exhaustive]
+pub struct Container {
+    pub init_pid: u32,
+    init_procfile: ProcFile,
+}
+
+impl Container {
     pub fn exec_command(&self, command: Command, cred: Option<&Credential>) -> Result<Waiter> {
         log::debug!("Container::exec_command.");
-        if self.init_pid.is_none() {
-            bail!("This container is not launched yet.");
-        }
 
         let mut command = CommandByMultiFork::new(command);
         command.pre_second_fork(|| {
-            enter_namespace(self.init_procfile.as_ref().unwrap())
+            enter_namespace(&self.init_procfile)
                 .with_context(|| "Failed to enter the init's namespace")?;
             if let Some(ref cred) = cred {
                 cred.drop_privilege();
@@ -144,11 +142,8 @@ impl Container {
         } else {
             nix::sys::signal::SIGINT
         };
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(self.init_pid.expect("[BUG] no init pid.") as i32),
-            signal,
-        )
-        .with_context(|| "Failed to kill the init process of the container.")?;
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(self.init_pid as i32), signal)
+            .with_context(|| "Failed to kill the init process of the container.")?;
         Ok(())
     }
 }

@@ -7,7 +7,7 @@ use std::os::unix::prelude::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::container::Container;
+use crate::container::{Container, ContainerLauncher};
 use crate::distrod_config::{self, DistrodConfig};
 use crate::envfile::EnvFile;
 use crate::mount_info::get_mount_entries;
@@ -21,37 +21,14 @@ use serde::{Deserialize, Serialize};
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
-pub struct Distro {
-    rootfs: PathBuf,
-    container: Container,
+#[derive(Debug, Clone, Default)]
+pub struct DistroLauncher {
+    rootfs: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct DistroRunInfo {
-    rootfs: PathBuf,
-    init_pid: u32,
-}
-
-impl Distro {
-    pub fn get_installed_distro<P: AsRef<Path>>(rootfs: Option<P>) -> Result<Option<Distro>> {
-        let create_container = |path: &Path| {
-            if !path.is_dir() {
-                return Ok(None);
-            }
-            let container = Container::new();
-            Ok(Some(Distro {
-                rootfs: PathBuf::from(path),
-                container,
-            }))
-        };
-        match rootfs {
-            Some(ref p) => create_container(p.as_ref()),
-            None => {
-                let config = DistrodConfig::get()
-                    .with_context(|| "Failed to acquire the Distrod config.")?;
-                create_container(config.distrod.default_distro_image.as_path())
-            }
-        }
+impl DistroLauncher {
+    pub fn new() -> Self {
+        DistroLauncher::default()
     }
 
     pub fn get_running_distro() -> Result<Option<Distro>> {
@@ -67,32 +44,71 @@ impl Distro {
         }
         Ok(Some(Distro {
             rootfs: run_info.rootfs,
-            container: Container::from_pid(run_info.init_pid)?,
+            container: ContainerLauncher::from_pid(run_info.init_pid)?,
         }))
     }
 
-    pub fn is_inside_running_distro() -> bool {
-        let mounts = get_mount_entries();
-        if mounts.is_err() {
-            return true;
-        }
-        let mounts = mounts.unwrap();
-        mounts
-            .iter()
-            .any(|entry| entry.path.starts_with(DISTRO_OLD_ROOT_PATH))
+    pub fn with_rootfs<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.rootfs = Some(path.as_ref().to_path_buf());
+        self
     }
 
-    pub fn launch(&mut self) -> Result<()> {
-        if let Err(e) = setup_etc_environment_file(&self.rootfs) {
+    pub fn from_default_distro(&mut self) -> Result<&mut Self> {
+        let config =
+            DistrodConfig::get().with_context(|| "Failed to acquire the Distrod config.")?;
+        self.rootfs = Some(config.distrod.default_distro_image.as_path().to_owned());
+        Ok(self)
+    }
+
+    pub fn launch(self) -> Result<Distro> {
+        let rootfs = self
+            .rootfs
+            .ok_or_else(|| anyhow!("rootfs is not initialized."))?;
+        if let Err(e) = setup_etc_environment_file(&rootfs) {
             log::warn!("Failed to setup /etc/environment. {:#?}", e);
         }
-        self.container
-            .launch(None, &self.rootfs, DISTRO_OLD_ROOT_PATH)
+        let mut container_launcher = ContainerLauncher::new();
+        let container = container_launcher
+            .launch(None, &rootfs, DISTRO_OLD_ROOT_PATH)
             .with_context(|| "Failed to launch a container.")?;
-        self.export_run_info()?;
-        Ok(())
+        export_distro_run_info(&rootfs, container.init_pid)
+            .with_context(|| "Failed to export the Distro running information.")?;
+        let distro = Distro { container, rootfs };
+        Ok(distro)
     }
+}
 
+fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
+    if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
+        fs::remove_file(&DISTRO_RUN_INFO_PATH)
+            .with_context(|| "Failed to remove the existing run info file.")?;
+    }
+    let mut file = BufWriter::new(
+        get_distro_run_info_file(true, true)
+            .with_context(|| "Failed to create a run info file.")?
+            .expect("[BUG] get_distro_run_info_file shuold return Some when create:true"),
+    );
+    let run_info = DistroRunInfo {
+        rootfs: rootfs.to_owned(),
+        init_pid,
+    };
+    file.write_all(&serde_json::to_vec(&run_info)?)
+        .with_context(|| "Failed to write to a distro run info file.")?;
+    Ok(())
+}
+
+pub struct Distro {
+    rootfs: PathBuf,
+    container: Container,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DistroRunInfo {
+    rootfs: PathBuf,
+    init_pid: u32,
+}
+
+impl Distro {
     pub fn exec_command<I, S, T1, T2, P>(
         &self,
         command: S,
@@ -135,28 +151,17 @@ impl Distro {
         }
         self.container.stop(sigkill)
     }
+}
 
-    fn export_run_info(&self) -> Result<()> {
-        if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
-            fs::remove_file(&DISTRO_RUN_INFO_PATH)
-                .with_context(|| "Failed to remove the existing run info file.")?;
-        }
-        let mut file = BufWriter::new(
-            get_distro_run_info_file(true, true)
-                .with_context(|| "Failed to create a run info file.")?
-                .expect("[BUG] get_distro_run_info_file shuold return Some when create:true"),
-        );
-        let run_info = DistroRunInfo {
-            rootfs: self.rootfs.clone(),
-            init_pid: self
-                .container
-                .init_pid
-                .ok_or_else(|| anyhow!("Distro is not launched yet, but being exported."))?,
-        };
-        file.write_all(&serde_json::to_vec(&run_info)?)
-            .with_context(|| "Failed to write to a distro run info file.")?;
-        Ok(())
+pub fn is_inside_running_distro() -> bool {
+    let mounts = get_mount_entries();
+    if mounts.is_err() {
+        return true;
     }
+    let mounts = mounts.unwrap();
+    mounts
+        .iter()
+        .any(|entry| entry.path.starts_with(DISTRO_OLD_ROOT_PATH))
 }
 
 pub fn initialize_distro_rootfs<P: AsRef<Path>>(

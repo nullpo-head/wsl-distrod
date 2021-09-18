@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use libs::cli_ui::{init_logger, LogLevel};
-use libs::distro::Distro;
+use libs::distro::{self, Distro, DistroLauncher};
 use libs::multifork::set_noninheritable_sig_ign;
 use nix::unistd::{Gid, Uid};
 use std::ffi::{CString, OsStr, OsString};
@@ -37,7 +37,7 @@ fn main() {
 }
 
 fn run(opts: Opts) -> Result<()> {
-    if Distro::is_inside_running_distro() {
+    if distro::is_inside_running_distro() {
         exec_command(&opts.command, &opts.arg0, &opts.args)
     } else {
         exec_command_in_distro(&opts.command, &opts.arg0, &opts.args)
@@ -77,7 +77,7 @@ where
     let inner = || -> Result<()> {
         let cred = get_real_credential()?;
 
-        let distro = match Distro::get_running_distro()
+        let distro = match DistroLauncher::get_running_distro()
             .with_context(|| "Failed to get the running distro.")?
         {
             Some(distro) => distro,
@@ -122,13 +122,9 @@ fn get_real_credential() -> Result<Credential> {
 }
 
 fn launch_distro() -> Result<Distro> {
-    let distro = Distro::get_installed_distro::<&Path>(None)
-        .with_context(|| "Failed to retrieve the installed distro.")?;
-    if distro.is_none() {
-        bail!("No default distro is configured.",)
-    }
-    let mut distro = distro.unwrap();
-    distro
+    let mut distro_launcher = DistroLauncher::default();
+    distro_launcher.from_default_distro().with_context(|| "Failed to get the default distro.")?;
+    let distro = distro_launcher
         .launch()
         .with_context(|| "Failed to launch the distro.")?;
     Ok(distro)
