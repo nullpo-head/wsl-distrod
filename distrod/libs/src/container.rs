@@ -1,15 +1,12 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use nix::sched::CloneFlags;
-use nix::unistd::{chown, Gid, Uid};
 use nix::NixPath;
 use passfd::FdPassingExt;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::os::unix::prelude::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -17,10 +14,21 @@ use crate::mount_info::{get_mount_entries, MountEntry};
 use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
-use crate::wsl_interop::collect_wsl_env_vars;
 
 #[derive(Default, Clone)]
-pub struct ContainerLauncher;
+pub struct ContainerLauncher {
+    mounts: Vec<ContainerMount>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContainerMount {
+    pub source: Option<HostPath>,
+    pub target: ContainerPath,
+    pub fstype: Option<OsString>,
+    pub flags: nix::mount::MsFlags,
+    pub data: Option<OsString>,
+    pub is_file: bool,
+}
 
 impl ContainerLauncher {
     pub fn new() -> Self {
@@ -28,23 +36,40 @@ impl ContainerLauncher {
     }
 
     pub fn from_pid(pid: u32) -> Result<Container> {
-        let procfile = ProcFile::from_pid(pid)?.ok_or_else(|| anyhow!("The given PID does not exist."))?;
+        let procfile =
+            ProcFile::from_pid(pid)?.ok_or_else(|| anyhow!("The given PID does not exist."))?;
         Ok(Container {
             init_pid: pid,
             init_procfile: procfile,
         })
     }
 
-    pub fn launch<P1, P2>(
+    pub fn with_mount(
         &mut self,
+        source: Option<HostPath>,
+        target: ContainerPath,
+        fstype: Option<OsString>,
+        flags: nix::mount::MsFlags,
+        data: Option<OsString>,
+        is_file: bool,
+    ) -> &mut Self {
+        self.mounts.push(ContainerMount {
+            source,
+            target,
+            fstype,
+            flags,
+            data,
+            is_file,
+        });
+        self
+    }
+
+    pub fn launch(
+        self,
         init: Option<Vec<OsString>>,
-        rootfs: P1,
-        old_root: P2,
-    ) -> Result<Container>
-    where
-        P1: AsRef<Path>,
-        P2: AsRef<Path>,
-    {
+        rootfs: HostPath,
+        old_root: ContainerPath,
+    ) -> Result<Container> {
         let init = init.unwrap_or_else(|| {
             vec![
                 OsString::from("/sbin/init"),
@@ -64,8 +89,6 @@ impl ContainerLauncher {
                 enter_new_namespace().with_context(|| "Failed to initialize Linux namespaces.")?;
                 Ok(())
             });
-            let new_root = PathBuf::from(rootfs.as_ref());
-            let old_root = PathBuf::from(old_root.as_ref());
             unsafe {
                 command.pre_exec(move || {
                     let inner = || -> Result<()> {
@@ -75,8 +98,26 @@ impl ContainerLauncher {
                             .send_fd(procfile.as_raw_fd())
                             .with_context(|| "Failed to do send_fd.")?;
                         drop(procfile);
-                        prepare_filesystem(&new_root, &old_root)
+                        prepare_filesystem(&rootfs, &old_root)
                             .with_context(|| "Failed to initialize the container's filesystem.")?;
+                        for mount in &self.mounts {
+                            create_mountpoint_unless_exist(mount.target.as_path(), mount.is_file)
+                                .with_context(|| {
+                                format!("Failed to create mountpoint {:?}", mount.target)
+                            })?;
+                            let source = mount
+                                .source
+                                .as_ref()
+                                .map(|p| p.to_container_path(&old_root));
+                            nix::mount::mount(
+                                source.as_ref().map(|c| c.as_path()),
+                                mount.target.as_path(),
+                                mount.fstype.as_deref(),
+                                mount.flags,
+                                mount.data.as_deref(),
+                            )
+                            .with_context(|| format!("Failed to mount {:?}", mount))?;
+                        }
                         Ok(())
                     };
                     if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
@@ -178,27 +219,20 @@ fn enter_new_namespace() -> Result<()> {
     Ok(())
 }
 
-fn prepare_filesystem<P1, P2>(new_root: P1, old_root: P2) -> Result<()>
-where
-    P1: AsRef<Path>,
-    P2: AsRef<Path>,
-{
-    if new_root.as_ref() == Path::new("/") {
-        prepare_host_base_root(old_root.as_ref())?;
-        mount_kernelcmdline().with_context(|| "Failed to overwrite the kernel commandline.")?;
+fn prepare_filesystem(new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
+    if new_root.as_path() == Path::new("/") {
+        prepare_host_base_root(old_root)?;
     } else {
-        prepare_minimum_root(new_root.as_ref(), old_root.as_ref())?;
+        prepare_minimum_root(new_root, old_root)?;
         let mount_entries =
             get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
-        mount_wsl_mountpoints(old_root.as_ref(), &mount_entries)?;
-        mount_kernelcmdline().with_context(|| "Failed to overwrite the kernel commandline.")?;
-        umount_host_mountpoints(old_root.as_ref(), &mount_entries)?;
+        umount_host_mountpoints(old_root, &mount_entries)?;
     }
     Ok(())
 }
 
-fn prepare_host_base_root<P: AsRef<Path>>(old_root: P) -> Result<()> {
-    let saved_old_proc = old_root.as_ref().join("proc");
+fn prepare_host_base_root(old_root: &ContainerPath) -> Result<()> {
+    let saved_old_proc = old_root.join("proc");
     create_mountpoint_unless_exist(&saved_old_proc, false)?;
     nix::mount::mount::<Path, Path, Path, Path>(
         Some("/proc".as_ref()),
@@ -209,15 +243,11 @@ fn prepare_host_base_root<P: AsRef<Path>>(old_root: P) -> Result<()> {
     )
     .with_context(|| format!("Failed to mount the old proc on {:?}.", &saved_old_proc))?;
     mount_nosource_fs("/proc", "proc")
-        .with_context(|| format!("setup {:?} fail.", old_root.as_ref().join("proc")))
+        .with_context(|| format!("setup {:?} fail.", old_root.join("proc")))
 }
 
-fn prepare_minimum_root<P1, P2>(new_root: P1, old_root: P2) -> Result<()>
-where
-    P1: AsRef<Path>,
-    P2: AsRef<Path>,
-{
-    let old_root_as_hostpath = new_root.as_ref().join(old_root.as_ref().strip_prefix("/")?);
+fn prepare_minimum_root(new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
+    let old_root_as_hostpath = old_root.to_host_path(new_root);
     if !old_root_as_hostpath.exists() {
         fs::create_dir_all(&old_root_as_hostpath).with_context(|| {
             format!(
@@ -234,17 +264,19 @@ where
         None,
     )
     .with_context(|| "Failed to bind mount the old_root")?;
-    if new_root.as_ref() == old_root.as_ref() {
-        std::env::set_current_dir(new_root.as_ref())
+    if new_root.as_path() == old_root.as_path() {
+        std::env::set_current_dir(new_root.as_path())
             .with_context(|| "Failed to chdir to the new root.")?;
     }
-    nix::unistd::pivot_root(new_root.as_ref(), &old_root_as_hostpath).with_context(|| {
-        format!(
-            "pivot_root failed. new: {:#?}, old: {:#?}",
-            new_root.as_ref(),
-            old_root_as_hostpath.as_path()
-        )
-    })?;
+    nix::unistd::pivot_root(new_root.as_path(), old_root_as_hostpath.as_path()).with_context(
+        || {
+            format!(
+                "pivot_root failed. new: {:#?}, old: {:#?}",
+                new_root.as_path(),
+                old_root_as_hostpath.as_path()
+            )
+        },
+    )?;
     let minimum_mounts = [
         ("/proc", "proc"),
         ("/tmp", "tmpfs"),
@@ -267,95 +299,6 @@ fn mount_nosource_fs<P: AsRef<Path>>(path: P, fstype: &str) -> Result<()> {
         None,
     )
     .with_context(|| format!("mount {:?} failed.", path.as_ref()))
-}
-
-fn mount_wsl_mountpoints<P: AsRef<Path>>(old_root: P, mount_entries: &[MountEntry]) -> Result<()> {
-    let mut bind_source = PathBuf::from(old_root.as_ref());
-    let binds = [
-        ("/init", true),
-        ("/sys", false),
-        ("/dev", false),
-        ("/mnt/wsl", false),
-        ("/run/WSL", false),
-        ("/etc/wsl.conf", true),
-        ("/etc/resolv.conf", true),
-        ("/proc/sys/fs/binfmt_misc", false),
-    ];
-    for (bind_target, is_file) in binds.iter() {
-        let num_dirs = bind_target.matches('/').count();
-        bind_source.push(&bind_target[1..]);
-        if !bind_source.exists() {
-            log::warn!("WSL path {:?} does not exist.", bind_source.to_str());
-            for _ in 0..num_dirs {
-                bind_source.pop();
-            }
-            continue;
-        }
-        let bind_target: &Path = bind_target.as_ref();
-        create_mountpoint_unless_exist(bind_target, *is_file)?;
-        nix::mount::mount::<Path, Path, Path, Path>(
-            Some(bind_source.as_path()),
-            bind_target,
-            None,
-            nix::mount::MsFlags::MS_BIND,
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "Failed to mount the WSL's special dir: {:?} -> {:?}",
-                bind_source.as_path(),
-                bind_target
-            )
-        })?;
-        for _ in 0..num_dirs {
-            bind_source.pop();
-        }
-    }
-
-    // Mount 9p drives, that is, Windows drives.
-    let mut init = bind_source.clone();
-    init.push("init");
-    let root = PathBuf::from("/");
-    for mount_entry in mount_entries {
-        let path = &mount_entry.path;
-        if !path.starts_with(&bind_source) {
-            continue;
-        }
-        if mount_entry.fstype.as_str() != "9p" {
-            continue;
-        }
-        if *path == init {
-            // /init is also mounted by 9p, but we have already mounted it.
-            continue;
-        }
-        let path_inside_container =
-            root.join(path.strip_prefix(&bind_source).with_context(|| {
-                format!("Unexpected error. strip_prefix failed for {:?}", &path)
-            })?);
-        if !path_inside_container.exists() {
-            fs::create_dir_all(&path_inside_container).with_context(|| {
-                format!(
-                    "Failed to create a mount point directory for {:?} inside the container.",
-                    &path_inside_container
-                )
-            })?;
-        }
-        nix::mount::mount::<Path, Path, Path, Path>(
-            Some(path),
-            path_inside_container.as_ref(),
-            None,
-            nix::mount::MsFlags::MS_BIND,
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "Failed to mount the Windows drives: {:?} -> {:?}",
-                path.as_path(),
-                path_inside_container
-            )
-        })?;
-    }
-    Ok(())
 }
 
 fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Result<()> {
@@ -396,75 +339,13 @@ fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Res
     Ok(())
 }
 
-/// Overwrite the kernel cmdline with one for the container.
-fn mount_kernelcmdline() -> Result<()> {
-    let new_cmdline_path = "/run/distrod-cmdline";
-    let mut new_cmdline = File::create(new_cmdline_path)
-        .with_context(|| format!("Failed to create '{}'.", new_cmdline_path))?;
-    chown(
-        new_cmdline_path,
-        Some(Uid::from_raw(0)),
-        Some(Gid::from_raw(0)),
-    )
-    .with_context(|| format!("Failed to chown '{}'", new_cmdline_path))?;
-
-    let mut cmdline_cont =
-        std::fs::read("/proc/cmdline").with_context(|| "Failed to read /proc/cmdline.")?;
-    if cmdline_cont.ends_with("\n".as_bytes()) {
-        cmdline_cont.truncate(cmdline_cont.len() - 1);
-    }
-
-    // Set default environment vairables for the systemd services.
-    for setenv in to_systemd_setenv_args(
-        collect_wsl_env_vars()
-            .with_context(|| "Failed to collect WSL envs.")?
-            .into_iter(),
-    ) {
-        cmdline_cont.extend(" ".as_bytes());
-        cmdline_cont.extend(setenv.as_bytes());
-    }
-    cmdline_cont.extend("\n".as_bytes());
-
-    new_cmdline
-        .write_all(&cmdline_cont)
-        .with_context(|| "Failed to write the new cmdline.")?;
-
-    nix::mount::mount::<Path, Path, Path, Path>(
-        Some(new_cmdline_path.as_ref()),
-        "/proc/cmdline".as_ref(),
-        None,
-        nix::mount::MsFlags::MS_BIND,
-        None,
-    )
-    .with_context(|| "Failed to do bind mount at the cmdline.")?;
-    Ok(())
-}
-
-fn to_systemd_setenv_args<I>(env: I) -> Vec<OsString>
-where
-    I: Iterator<Item = (OsString, OsString)>,
-{
-    let mut args = vec![];
-    for (name, value) in env {
-        let mut arg = OsString::from("systemd.setenv=");
-        arg.push(name);
-        arg.push("=");
-        arg.push(value);
-        args.push(arg);
-    }
-    args
-}
-
 #[allow(clippy::unnecessary_wraps)]
-fn umount_host_mountpoints<P: AsRef<Path>>(
-    old_root: P,
-    mount_entries: &[MountEntry],
-) -> Result<()> {
+fn umount_host_mountpoints(old_root: &ContainerPath, mount_entries: &[MountEntry]) -> Result<()> {
     let mut mount_paths: Vec<&PathBuf> = mount_entries.iter().map(|e| &e.path).collect();
     #[allow(clippy::clippy::unnecessary_sort_by)]
     mount_paths.sort_by(|a, b| b.len().cmp(&a.len())); // reverse sort
     for mount_path in mount_paths {
-        if !mount_path.starts_with(&old_root) || mount_path.as_path() == old_root.as_ref() {
+        if !mount_path.starts_with(&old_root) || mount_path.as_path() == old_root.as_path() {
             continue;
         }
         let err = nix::mount::umount(mount_path.as_path());
@@ -477,4 +358,113 @@ fn umount_host_mountpoints<P: AsRef<Path>>(
         }
     }
     Ok(())
+}
+
+pub trait ContainerPathRoot {
+    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath>;
+    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath>;
+    fn get_rootfs_path(&self) -> Result<HostPath> {
+        Ok(self.to_host_path(&ContainerPath::new("/")?)?)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContainerPath(PathBuf);
+
+impl ContainerPath {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        if !path.as_ref().has_root() {
+            bail!(
+                "Non-absolute path is given to ContainerPath::new {:?}",
+                path.as_ref()
+            );
+        }
+        Ok(ContainerPath(path.as_ref().to_owned()))
+    }
+
+    pub fn to_host_path(&self, container_rootfs: &HostPath) -> HostPath {
+        let host_path = container_rootfs.join(
+            self.0
+                .strip_prefix("/")
+                .expect("[BUG] ContainerPath should be an absolute path."),
+        );
+        HostPath(host_path)
+    }
+}
+
+impl AsRef<Path> for ContainerPath {
+    fn as_ref(&self) -> &Path {
+        self.0.as_path()
+    }
+}
+
+impl AsRef<ContainerPath> for ContainerPath {
+    fn as_ref(&self) -> &ContainerPath {
+        self
+    }
+}
+
+impl Deref for ContainerPath {
+    type Target = PathBuf;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ContainerPath {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HostPath(PathBuf);
+
+impl HostPath {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        if !path.as_ref().has_root() {
+            bail!(
+                "Non-absolute path is given to HostPath::new {:?}",
+                path.as_ref()
+            );
+        }
+        Ok(HostPath(path.as_ref().to_owned()))
+    }
+
+    pub fn to_container_path(&self, host_rootfs: &ContainerPath) -> ContainerPath {
+        if let Ok(tail) = self.0.strip_prefix(host_rootfs.as_path()) {
+            return ContainerPath(Path::new("/").join(tail));
+        }
+        let container_path = host_rootfs.join(
+            self.0
+                .strip_prefix("/")
+                .expect("[BUG] ContainerPath should be an absolute path."),
+        );
+        ContainerPath(container_path)
+    }
+}
+
+impl AsRef<Path> for HostPath {
+    fn as_ref(&self) -> &Path {
+        self.0.as_path()
+    }
+}
+
+impl AsRef<HostPath> for HostPath {
+    fn as_ref(&self) -> &HostPath {
+        self
+    }
+}
+
+impl Deref for HostPath {
+    type Target = PathBuf;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for HostPath {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }

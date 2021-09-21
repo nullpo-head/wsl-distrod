@@ -3,11 +3,11 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::os::linux::fs::MetadataExt;
-use std::os::unix::prelude::CommandExt;
+use std::os::unix::prelude::{CommandExt, OsStrExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::container::{Container, ContainerLauncher};
+use crate::container::{Container, ContainerLauncher, ContainerPath, ContainerPathRoot, HostPath};
 use crate::distrod_config::{self, DistrodConfig};
 use crate::envfile::EnvFile;
 use crate::mount_info::get_mount_entries;
@@ -43,14 +43,18 @@ impl DistroLauncher {
             return Ok(None);
         }
         Ok(Some(Distro {
-            rootfs: run_info.rootfs,
+            rootfs: HostPath::new(run_info.rootfs)?,
             container: ContainerLauncher::from_pid(run_info.init_pid)?,
         }))
     }
 
-    pub fn with_rootfs<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.rootfs = Some(path.as_ref().to_path_buf());
-        self
+    pub fn with_rootfs<P: AsRef<Path>>(&mut self, path: P) -> Result<&mut Self> {
+        self.rootfs = Some(
+            path.as_ref()
+                .canonicalize()
+                .with_context(|| format!("Failed to canonicalize {:?}", path.as_ref()))?,
+        );
+        Ok(self)
     }
 
     pub fn from_default_distro(&mut self) -> Result<&mut Self> {
@@ -63,42 +67,160 @@ impl DistroLauncher {
     pub fn launch(self) -> Result<Distro> {
         let rootfs = self
             .rootfs
+            .as_ref()
             .ok_or_else(|| anyhow!("rootfs is not initialized."))?;
         if let Err(e) = setup_etc_environment_file(&rootfs) {
             log::warn!("Failed to setup /etc/environment. {:#?}", e);
         }
         let mut container_launcher = ContainerLauncher::new();
+        if self.rootfs.as_deref() != Some(Path::new("/")) {
+            mount_wsl_mountpoints(&mut container_launcher)
+                .with_context(|| "Failed to mount WSL mountpoints.")?;
+        }
+        mount_kernelcmdline(&mut container_launcher)
+            .with_context(|| "Failed to mount kernelcmdline.")?;
         let container = container_launcher
-            .launch(None, &rootfs, DISTRO_OLD_ROOT_PATH)
+            .launch(
+                None,
+                HostPath::new(&rootfs)?,
+                ContainerPath::new(DISTRO_OLD_ROOT_PATH)?,
+            )
             .with_context(|| "Failed to launch a container.")?;
         export_distro_run_info(&rootfs, container.init_pid)
             .with_context(|| "Failed to export the Distro running information.")?;
-        let distro = Distro { container, rootfs };
+        let distro = Distro {
+            container,
+            rootfs: HostPath::new(rootfs)?,
+        };
         Ok(distro)
     }
 }
 
-fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
-    if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
-        fs::remove_file(&DISTRO_RUN_INFO_PATH)
-            .with_context(|| "Failed to remove the existing run info file.")?;
+fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<()> {
+    let binds = vec![
+        ("/init", true),
+        ("/sys", false),
+        ("/dev", false),
+        ("/mnt/wsl", false),
+        ("/run/WSL", false),
+        ("/etc/wsl.conf", true),
+        ("/etc/resolv.conf", true),
+        ("/proc/sys/fs/binfmt_misc", false),
+    ];
+    for (bind_file, is_file) in binds {
+        if !Path::new(bind_file).exists() {
+            log::warn!("WSL path {:?} does not exist.", bind_file);
+            continue;
+        }
+        container_launcher.with_mount(
+            Some(HostPath::new(bind_file)?),
+            ContainerPath::new(bind_file)?,
+            None,
+            nix::mount::MsFlags::MS_BIND,
+            None,
+            is_file,
+        );
     }
-    let mut file = BufWriter::new(
-        get_distro_run_info_file(true, true)
-            .with_context(|| "Failed to create a run info file.")?
-            .expect("[BUG] get_distro_run_info_file shuold return Some when create:true"),
-    );
-    let run_info = DistroRunInfo {
-        rootfs: rootfs.to_owned(),
-        init_pid,
-    };
-    file.write_all(&serde_json::to_vec(&run_info)?)
-        .with_context(|| "Failed to write to a distro run info file.")?;
+
+    // Mount 9p drives, that is, Windows drives.
+    let mount_entries = get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
+    for mount_entry in mount_entries {
+        let path = &mount_entry.path;
+        if mount_entry.fstype.as_str() != "9p" {
+            continue;
+        }
+        if path.to_str() == Some("/init") {
+            // /init is also mounted by 9p, but we have already mounted it.
+            continue;
+        }
+        container_launcher.with_mount(
+            Some(HostPath::new(path)?),
+            ContainerPath::new(path)?,
+            None,
+            nix::mount::MsFlags::MS_BIND,
+            None,
+            false,
+        );
+    }
     Ok(())
 }
 
+/// Overwrite the kernel cmdline with one for the container.
+fn mount_kernelcmdline(container_launcher: &mut ContainerLauncher) -> Result<()> {
+    let new_cmdline_path = "/run/distrod-cmdline";
+    let mut new_cmdline = File::create(new_cmdline_path)
+        .with_context(|| format!("Failed to create '{}'.", new_cmdline_path))?;
+    nix::unistd::chown(
+        new_cmdline_path,
+        Some(nix::unistd::Uid::from_raw(0)),
+        Some(nix::unistd::Gid::from_raw(0)),
+    )
+    .with_context(|| format!("Failed to chown '{}'", new_cmdline_path))?;
+
+    let mut cmdline_cont =
+        std::fs::read("/proc/cmdline").with_context(|| "Failed to read /proc/cmdline.")?;
+    if cmdline_cont.ends_with("\n".as_bytes()) {
+        cmdline_cont.truncate(cmdline_cont.len() - 1);
+    }
+
+    // Set default environment vairables for the systemd services.
+    for setenv in to_systemd_setenv_args(
+        collect_wsl_env_vars()
+            .with_context(|| "Failed to collect WSL envs.")?
+            .into_iter(),
+    ) {
+        cmdline_cont.extend(" ".as_bytes());
+        cmdline_cont.extend(setenv.as_bytes());
+    }
+    cmdline_cont.extend("\n".as_bytes());
+
+    new_cmdline
+        .write_all(&cmdline_cont)
+        .with_context(|| "Failed to write the new cmdline.")?;
+
+    container_launcher.with_mount(
+        Some(HostPath::new(new_cmdline_path)?),
+        ContainerPath::new("/proc/cmdline")?,
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+        true,
+    );
+    Ok(())
+}
+
+fn to_systemd_setenv_args<I>(env: I) -> Vec<OsString>
+where
+    I: Iterator<Item = (OsString, OsString)>,
+{
+    let mut args = vec![];
+    for (name, value) in env {
+        let mut arg = OsString::from("systemd.setenv=");
+        arg.push(name);
+        arg.push("=");
+        arg.push(value);
+        args.push(arg);
+    }
+    args
+}
+
+impl ContainerPathRoot for DistroLauncher {
+    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath> {
+        Ok(container_path.to_host_path(&HostPath::new(
+            &self
+                .rootfs
+                .as_ref()
+                .ok_or_else(|| anyhow!("rootfs is not set yet."))?,
+        )?))
+    }
+
+    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath> {
+        Ok(host_path.to_container_path(&ContainerPath::new(DISTRO_OLD_ROOT_PATH)?))
+    }
+}
+
 pub struct Distro {
-    rootfs: PathBuf,
+    rootfs: HostPath,
     container: Container,
 }
 
@@ -165,18 +287,14 @@ pub fn is_inside_running_distro() -> bool {
 }
 
 pub fn initialize_distro_rootfs<P: AsRef<Path>>(
-    path: P,
+    rootfs: P,
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
-    let metadata = fs::metadata(path.as_ref())?;
-    if !metadata.is_dir() {
-        bail!("The given path is not a directory: '{:?}'", path.as_ref());
-    }
-
+    let rootfs = HostPath::new(rootfs.as_ref())?;
     // Remove systemd network configurations
     for path in glob::glob(
-        path.as_ref()
-            .join("etc/systemd/network/*.network")
+        &ContainerPath::new("/etc/systemd/network/*.network")?
+            .to_host_path(&rootfs)
             .as_os_str()
             .to_str()
             .ok_or_else(|| anyhow!("Failed to convert systemd network file paths."))?,
@@ -186,7 +304,7 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     }
 
     // echo hostname to /etc/hostname
-    let hostname_path = path.as_ref().join("etc/hostname");
+    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(&rootfs);
     let mut hostname_buf = vec![0; 64];
     let hostname =
         nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
@@ -195,8 +313,8 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
 
     // Remove /etc/resolv.conf
     if overwrites_potential_userfiles {
-        let resolv_conf_path = path.as_ref().join("etc/resolv.conf");
-        fs::remove_file(path.as_ref().join(&resolv_conf_path))
+        let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(&rootfs);
+        fs::remove_file(&resolv_conf_path)
             .with_context(|| format!("Failed to remove '{:?}'.", &resolv_conf_path))?;
         // Touch /etc/resolv.conf so that WSL over-writes it or we can do bind-mount on it
         File::create(&resolv_conf_path)
@@ -210,13 +328,13 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         "multipathd.service",
     ];
     for unit in &to_be_disabled {
-        if let Err(err) = SystemdUnitDisabler::new(path.as_ref(), unit).disable() {
+        if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).disable() {
             log::warn!("Faled to disable {}. Error: {:?}", unit, err);
         }
     }
     let to_be_masked = ["systemd-remount-fs.service", "systemd-modules-load.service"];
     for unit in &to_be_masked {
-        if let Err(err) = SystemdUnitDisabler::new(path.as_ref(), unit).mask() {
+        if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).mask() {
             log::warn!("Faled to mask {}. Error: {:?}", unit, err);
         }
     }
@@ -224,20 +342,15 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn cleanup_distro_rootfs<P: AsRef<Path>>(path: P) -> Result<()> {
-    let metadata = fs::metadata(path.as_ref())?;
-    if !metadata.is_dir() {
-        bail!("The given path is not a directory: '{:?}'", path.as_ref());
-    }
-
-    cleanup_etc_environment_file(path.as_ref())
-        .with_context(|| "Failed to cleanup /etc/environment")?;
+pub fn cleanup_distro_rootfs<P: AsRef<Path>>(rootfs: P) -> Result<()> {
+    cleanup_etc_environment_file(&rootfs).with_context(|| "Failed to cleanup /etc/environment")?;
 
     Ok(())
 }
 
-fn setup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
-    let env_file_path = rootfs_path.as_ref().join("etc/environment");
+fn setup_etc_environment_file<P: AsRef<Path>>(rootfs: P) -> Result<()> {
+    let rootfs = HostPath::new(rootfs.as_ref())?;
+    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(&rootfs);
     let mut env_file = EnvFile::open(&env_file_path)
         .with_context(|| format!("Failed to open '{:?}'.", &&env_file_path))?;
 
@@ -269,8 +382,9 @@ fn setup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_etc_environment_file<P: AsRef<Path>>(rootfs_path: P) -> Result<()> {
-    let env_file_path = rootfs_path.as_ref().join("etc/environment");
+fn cleanup_etc_environment_file<P: AsRef<Path>>(rootfs: P) -> Result<()> {
+    let rootfs = HostPath::new(rootfs.as_ref())?;
+    let env_file_path = ContainerPath::new("/etc/environment")?.to_host_path(&rootfs);
     if !env_file_path.exists() {
         return Ok(());
     }
@@ -319,6 +433,25 @@ fn remove_distrod_bin_from_path(path: &str) -> String {
     result.replace(&distrod_bin_path, "")
 }
 
+fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
+    if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
+        fs::remove_file(&DISTRO_RUN_INFO_PATH)
+            .with_context(|| "Failed to remove the existing run info file.")?;
+    }
+    let mut file = BufWriter::new(
+        get_distro_run_info_file(true, true)
+            .with_context(|| "Failed to create a run info file.")?
+            .expect("[BUG] get_distro_run_info_file shuold return Some when create:true"),
+    );
+    let run_info = DistroRunInfo {
+        rootfs: rootfs.to_owned(),
+        init_pid,
+    };
+    file.write_all(&serde_json::to_vec(&run_info)?)
+        .with_context(|| "Failed to write to a distro run info file.")?;
+    Ok(())
+}
+
 fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
     let mut json = fs::OpenOptions::new();
     json.read(true);
@@ -342,4 +475,14 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
         );
     }
     Ok(Some(json))
+}
+
+impl ContainerPathRoot for Distro {
+    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath> {
+        Ok(container_path.to_host_path(&self.rootfs))
+    }
+
+    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath> {
+        Ok(host_path.to_container_path(&ContainerPath::new(DISTRO_OLD_ROOT_PATH)?))
+    }
 }

@@ -306,9 +306,13 @@ fn launch_distro(opts: StartOpts) -> Result<()> {
     }
     let mut distro_launcher = DistroLauncher::default();
     if let Some(rootfs) = opts.rootfs {
-        distro_launcher.with_rootfs(rootfs);
+        distro_launcher
+            .with_rootfs(&rootfs)
+            .with_context(|| format!("Failed to set {:?} to the rootfs of the distro.", &rootfs))?;
     } else {
-        distro_launcher.from_default_distro().with_context(|| "Failed to get the default distro.")?;
+        distro_launcher
+            .from_default_distro()
+            .with_context(|| "Failed to get the default distro.")?;
     }
     distro_launcher
         .launch()
@@ -317,8 +321,8 @@ fn launch_distro(opts: StartOpts) -> Result<()> {
 }
 
 fn exec_command(opts: ExecOpts) -> Result<()> {
-    let distro =
-        DistroLauncher::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    let distro = DistroLauncher::get_running_distro()
+        .with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         if let Some(ref rootfs) = opts.rootfs {
             launch_distro(StartOpts {
@@ -371,8 +375,8 @@ fn get_credential<P: AsRef<Path>>(
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {
-    let distro =
-        DistroLauncher::get_running_distro().with_context(|| "Failed to get the running distro.")?;
+    let distro = DistroLauncher::get_running_distro()
+        .with_context(|| "Failed to get the running distro.")?;
     if distro.is_none() {
         bail!("No distro is currently running.");
     }
