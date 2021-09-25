@@ -371,14 +371,6 @@ fn umount_host_mountpoints(old_root: &ContainerPath, mount_entries: &[MountEntry
     Ok(())
 }
 
-pub trait ContainerPathRoot {
-    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath>;
-    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath>;
-    fn get_rootfs_path(&self) -> Result<HostPath> {
-        Ok(self.to_host_path(&ContainerPath::new("/")?)?)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ContainerPath(PathBuf);
 

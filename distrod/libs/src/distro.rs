@@ -7,7 +7,7 @@ use std::os::unix::prelude::{CommandExt, OsStrExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::container::{Container, ContainerLauncher, ContainerPath, ContainerPathRoot, HostPath};
+use crate::container::{Container, ContainerLauncher, ContainerPath, HostPath};
 use crate::distrod_config::{self, DistrodConfig};
 use crate::envfile::EnvFile;
 use crate::mount_info::get_mount_entries;
@@ -202,21 +202,6 @@ where
         args.push(arg);
     }
     args
-}
-
-impl ContainerPathRoot for DistroLauncher {
-    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath> {
-        Ok(container_path.to_host_path(&HostPath::new(
-            &self
-                .rootfs
-                .as_ref()
-                .ok_or_else(|| anyhow!("rootfs is not set yet."))?,
-        )?))
-    }
-
-    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath> {
-        Ok(host_path.to_container_path(&ContainerPath::new(DISTRO_OLD_ROOT_PATH)?))
-    }
 }
 
 pub struct Distro {
@@ -475,14 +460,4 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
         );
     }
     Ok(Some(json))
-}
-
-impl ContainerPathRoot for Distro {
-    fn to_host_path(&self, container_path: &ContainerPath) -> Result<HostPath> {
-        Ok(container_path.to_host_path(&self.rootfs))
-    }
-
-    fn to_container_path(&self, host_path: &HostPath) -> Result<ContainerPath> {
-        Ok(host_path.to_container_path(&ContainerPath::new(DISTRO_OLD_ROOT_PATH)?))
-    }
 }
