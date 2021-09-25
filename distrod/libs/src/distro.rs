@@ -179,7 +179,7 @@ fn mount_kernelcmdline(container_launcher: &mut ContainerLauncher) -> Result<()>
         .with_context(|| "Failed to write the new cmdline.")?;
 
     container_launcher.with_mount(
-        Some(HostPath::new(new_cmdline_path)?),
+        Some(HostPath::new(new_cmdline_path)?), // /run is bind-mounted
         ContainerPath::new("/proc/cmdline")?,
         None,
         nix::mount::MsFlags::MS_BIND,

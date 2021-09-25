@@ -87,6 +87,7 @@ prepare_for_nested_distrod() {
     sudo mount --bind /var/run /var/run
     sudo mount -t overlay overlay -o lowerdir=/var/run,upperdir=/tmp/distrod_test/var/run/upper,workdir=/tmp/distrod_test/var/run/work /var/run
     sudo rm -f /var/run/distrod.json
+    sudo rm -f /var/run/distrod-cmdline
     sudo umount /mnt/distrod_root/proc || true  # may not exist
 }
 

@@ -98,26 +98,9 @@ impl ContainerLauncher {
                             .send_fd(procfile.as_raw_fd())
                             .with_context(|| "Failed to do send_fd.")?;
                         drop(procfile);
-                        prepare_filesystem(&rootfs, &old_root)
+
+                        self.prepare_filesystem(&rootfs, &old_root)
                             .with_context(|| "Failed to initialize the container's filesystem.")?;
-                        for mount in &self.mounts {
-                            create_mountpoint_unless_exist(mount.target.as_path(), mount.is_file)
-                                .with_context(|| {
-                                format!("Failed to create mountpoint {:?}", mount.target)
-                            })?;
-                            let source = mount
-                                .source
-                                .as_ref()
-                                .map(|p| p.to_container_path(&old_root));
-                            nix::mount::mount(
-                                source.as_ref().map(|c| c.as_path()),
-                                mount.target.as_path(),
-                                mount.fstype.as_deref(),
-                                mount.flags,
-                                mount.data.as_deref(),
-                            )
-                            .with_context(|| format!("Failed to mount {:?}", mount))?;
-                        }
                         Ok(())
                     };
                     if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
@@ -145,6 +128,46 @@ impl ContainerLauncher {
             init_procfile,
         })
     }
+
+    fn prepare_filesystem(&self, new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
+        if new_root.as_path() == Path::new("/") {
+            prepare_host_base_root(old_root)?;
+        } else {
+            prepare_minimum_root(new_root, old_root)?;
+            self.process_mounts(old_root)?;
+            let mount_entries =
+                get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
+            umount_host_mountpoints(old_root, &mount_entries)?;
+        }
+        Ok(())
+    }
+
+    fn process_mounts(&self, old_root: &ContainerPath) -> Result<()> {
+        for mount in &self.mounts {
+            create_mountpoint_unless_exist(mount.target.as_path(), mount.is_file)
+                .with_context(|| format!("Failed to create mountpoint {:?}", mount.target))?;
+            let source = mount
+                .source
+                .as_ref()
+                .map(|p| p.to_container_path(&old_root));
+            nix::mount::mount(
+                source.as_ref().map(|p| p.as_path()),
+                mount.target.as_path(),
+                mount.fstype.as_deref(),
+                mount.flags,
+                mount.data.as_deref(),
+            )
+            .with_context(|| format!("Failed to mount {:?}", &mount))?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MountSource {
+    Host(HostPath),
+    Container(ContainerPath),
+    None,
 }
 
 #[non_exhaustive]
@@ -216,18 +239,6 @@ fn enter_new_namespace() -> Result<()> {
     nix::sched::unshare(
         CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWUTS,
     )?;
-    Ok(())
-}
-
-fn prepare_filesystem(new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
-    if new_root.as_path() == Path::new("/") {
-        prepare_host_base_root(old_root)?;
-    } else {
-        prepare_minimum_root(new_root, old_root)?;
-        let mount_entries =
-            get_mount_entries().with_context(|| "Failed to retrieve mount entries")?;
-        umount_host_mountpoints(old_root, &mount_entries)?;
-    }
     Ok(())
 }
 
