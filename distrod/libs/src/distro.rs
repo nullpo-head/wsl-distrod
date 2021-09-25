@@ -311,6 +311,7 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         "dhcpcd.service",
         "NetworkManager.service",
         "multipathd.service",
+        "getty@tty1.service",
     ];
     for unit in &to_be_disabled {
         if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).disable() {
