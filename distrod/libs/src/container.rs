@@ -435,9 +435,6 @@ impl HostPath {
     }
 
     pub fn to_container_path(&self, host_rootfs: &ContainerPath) -> ContainerPath {
-        if let Ok(tail) = self.0.strip_prefix(host_rootfs.as_path()) {
-            return ContainerPath(Path::new("/").join(tail));
-        }
         let container_path = host_rootfs.join(
             self.0
                 .strip_prefix("/")
