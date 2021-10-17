@@ -122,7 +122,7 @@ fn get_real_credential() -> Result<Credential> {
 }
 
 fn launch_distro() -> Result<Distro> {
-    let mut distro_launcher = DistroLauncher::default();
+    let mut distro_launcher = DistroLauncher::new()?;
     distro_launcher
         .from_default_distro()
         .with_context(|| "Failed to get the default distro.")?;

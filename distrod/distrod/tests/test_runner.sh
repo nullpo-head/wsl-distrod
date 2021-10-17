@@ -48,7 +48,7 @@ main () {
 
     # Export environment variables the integration test expects the runner to set
     export DISTROD_INSTALL_DIR
-    export DISTROD_IMAGE_CACHE_DIR=${DISTROD_IMAGE_CACHE_DIR:-"/tmp/distrod_integration_test"}
+    export DISTROD_IMAGE_CACHE_DIR=${DISTROD_IMAGE_CACHE_DIR:-"$(dirname "$0")/../../.cache/distrod_integration_test"}
     RELIABLE_CONNECTION_IP_ADDRESS="$(dig +short www.google.com)"
     export RELIABLE_CONNECTION_IP_ADDRESS
     # run the tests

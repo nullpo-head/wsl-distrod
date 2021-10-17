@@ -215,9 +215,6 @@ fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
 fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
     shell_hook::disable_default_shell_hook()
         .with_context(|| "Failed to disable the hook to the default shell.")?;
-    if let Err(e) = distro::cleanup_distro_rootfs("/") {
-        log::warn!("Failed to clean up the rootfs: {:?}", e);
-    }
     log::info!("Distrod has been disabled. Now systemd will not start automatically.");
     if let Err(e) = autostart::disable_autostart_on_windows_boot(
         &wsl_interop::get_distro_name().with_context(|| "Failed to get the distro name.")?,
@@ -304,7 +301,7 @@ fn launch_distro(opts: StartOpts) -> Result<()> {
     {
         bail!("There is already a running distro.");
     }
-    let mut distro_launcher = DistroLauncher::default();
+    let mut distro_launcher = DistroLauncher::new()?;
     if let Some(rootfs) = opts.rootfs {
         distro_launcher
             .with_rootfs(&rootfs)

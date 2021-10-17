@@ -12,11 +12,11 @@ use libs::{
 use once_cell::sync::Lazy;
 
 static DISTROD_SETUP: Lazy<DistrodSetup> = Lazy::new(|| {
-    let distrod_install_info = DistrodSetup::new("ubuntu");
-    distrod_install_info.create();
-    distrod_install_info.start();
+    let distrod_setup = DistrodSetup::new("ubuntu");
+    distrod_setup.create();
+    distrod_setup.start();
     std::thread::sleep(Duration::from_secs(5));
-    distrod_install_info
+    distrod_setup
 });
 
 #[test]

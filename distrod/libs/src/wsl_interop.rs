@@ -7,7 +7,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use procfs::process;
 
-use crate::mount_info::get_mount_entries;
+use crate::{envfile::PathVariable, mount_info::get_mount_entries};
 
 pub fn get_wsl_drive_path(drive_letter: &str) -> Result<Option<PathBuf>> {
     let entries = get_mount_entries().with_context(|| "Failed to get the mount entries.")?;
@@ -21,6 +21,20 @@ pub fn get_wsl_drive_path(drive_letter: &str) -> Result<Option<PathBuf>> {
             None
         }
     }))
+}
+
+fn get_wsl_drive_mount_point() -> Result<Option<PathBuf>> {
+    let c_drive = get_wsl_drive_path("c")
+        .with_context(|| "Failed to get the path where C drive is mounted.")?;
+    if c_drive.is_none() {
+        return Ok(None);
+    }
+    let c_drive = c_drive.unwrap();
+    Ok(Some(
+        c_drive
+            .parent()
+            .map_or_else(|| PathBuf::from("/"), |p| p.to_owned()),
+    ))
 }
 
 pub fn get_distro_name() -> Result<String> {
@@ -67,4 +81,23 @@ pub fn collect_wsl_env_vars() -> Result<HashMap<OsString, OsString>> {
     }
 
     bail!("Couldn't find WSL envs");
+}
+
+pub fn collect_wsl_paths() -> Result<Vec<String>> {
+    let wsl_mount_point =
+        get_wsl_drive_mount_point().with_context(|| "Failed to get the WSL drive mount point.")?;
+    if wsl_mount_point.is_none() {
+        return Ok(vec![]);
+    }
+    let wsl_mount_point = wsl_mount_point.unwrap();
+    let wsl_mount_point = wsl_mount_point.to_string_lossy();
+
+    let path = std::env::var("PATH")?;
+    let path = PathVariable::parse(&path);
+    let wsl_paths = path
+        .iter()
+        .filter(|path| path.starts_with(wsl_mount_point.as_ref()))
+        .map(|p| p.to_owned())
+        .collect();
+    Ok(wsl_paths)
 }

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -9,26 +10,39 @@ use std::process::Command;
 
 use crate::container::{Container, ContainerLauncher, ContainerPath, HostPath};
 use crate::distrod_config::{self, DistrodConfig};
-use crate::envfile::EnvFile;
+use crate::envfile::{EnvFile, ProfileDotDScript};
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 use crate::systemdunit::SystemdUnitDisabler;
-use crate::wsl_interop::collect_wsl_env_vars;
+use crate::wsl_interop::{collect_wsl_env_vars, collect_wsl_paths};
 use serde::{Deserialize, Serialize};
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DistroLauncher {
     rootfs: Option<PathBuf>,
+    system_envs: HashMap<String, String>,
+    system_paths: HashSet<String>,
+    session_paths: HashSet<String>,
 }
 
 impl DistroLauncher {
-    pub fn new() -> Self {
-        DistroLauncher::default()
+    pub fn new() -> Result<Self> {
+        let mut distro_launcher = DistroLauncher {
+            rootfs: None,
+            system_envs: HashMap::new(),
+            system_paths: HashSet::new(),
+            session_paths: HashSet::new(),
+        };
+        distro_launcher
+            .with_wsl_envs()
+            .with_context(|| "failed to set up WSL env vars")?;
+        distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
+        Ok(distro_launcher)
     }
 
     pub fn get_running_distro() -> Result<Option<Distro>> {
@@ -43,7 +57,6 @@ impl DistroLauncher {
             return Ok(None);
         }
         Ok(Some(Distro {
-            rootfs: HostPath::new(run_info.rootfs)?,
             container: ContainerLauncher::from_pid(run_info.init_pid)?,
         }))
     }
@@ -64,21 +77,39 @@ impl DistroLauncher {
         Ok(self)
     }
 
+    pub fn with_system_env(&mut self, key: String, val: String) -> &mut Self {
+        self.system_envs.insert(key, val);
+        self
+    }
+
+    pub fn with_system_path(&mut self, path: String) -> &mut Self {
+        self.system_paths.insert(path);
+        self
+    }
+
+    pub fn with_session_path(&mut self, path: String) -> &mut Self {
+        self.session_paths.insert(path);
+        self
+    }
+
     pub fn launch(self) -> Result<Distro> {
         let rootfs = self
             .rootfs
-            .as_ref()
             .ok_or_else(|| anyhow!("rootfs is not initialized."))?;
-        if let Err(e) = setup_etc_environment_file(&rootfs) {
-            log::warn!("Failed to setup /etc/environment. {:#?}", e);
-        }
+
         let mut container_launcher = ContainerLauncher::new();
-        if self.rootfs.as_deref() != Some(Path::new("/")) {
+        if rootfs != Path::new("/") {
             mount_wsl_mountpoints(&mut container_launcher)
                 .with_context(|| "Failed to mount WSL mountpoints.")?;
         }
+
         mount_kernelcmdline(&mut container_launcher)
             .with_context(|| "Failed to mount kernelcmdline.")?;
+        write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
+            .with_context(|| "Failed to write system env file.")?;
+        write_session_env_files(HostPath::new(&rootfs)?, self.session_paths)
+            .with_context(|| "Failed to write session env file.")?;
+
         let container = container_launcher
             .launch(
                 None,
@@ -86,13 +117,27 @@ impl DistroLauncher {
                 ContainerPath::new(DISTRO_OLD_ROOT_PATH)?,
             )
             .with_context(|| "Failed to launch a container.")?;
+
         export_distro_run_info(&rootfs, container.init_pid)
             .with_context(|| "Failed to export the Distro running information.")?;
-        let distro = Distro {
-            container,
-            rootfs: HostPath::new(rootfs)?,
-        };
+
+        let distro = Distro { container };
         Ok(distro)
+    }
+
+    fn with_wsl_envs(&mut self) -> Result<&mut Self> {
+        let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
+        for (key, value) in &wsl_envs {
+            self.with_system_env(
+                key.to_string_lossy().to_string(),
+                value.to_string_lossy().to_string(),
+            );
+        }
+        let wsl_paths = collect_wsl_paths().with_context(|| "Failed to collect WSL paths.")?;
+        for path in wsl_paths {
+            self.with_session_path(path);
+        }
+        Ok(self)
     }
 }
 
@@ -204,8 +249,41 @@ where
     args
 }
 
+fn write_system_env_files(
+    rootfs_path: HostPath,
+    envs: HashMap<String, String>,
+    paths: HashSet<String>,
+) -> Result<()> {
+    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(&rootfs_path);
+    let mut env_file = EnvFile::open(&env_file_path)
+        .with_context(|| format!("Failed to open '{:?}'.", &env_file_path))?;
+    for (name, value) in envs {
+        env_file.put_env(name, value);
+    }
+    for path in paths {
+        env_file.put_path(path);
+    }
+    env_file
+        .write()
+        .with_context(|| format!("Failed to write system env file on {:?}", env_file_path))?;
+    Ok(())
+}
+
+fn write_session_env_files(rootfs_path: HostPath, paths: HashSet<String>) -> Result<()> {
+    let mut profile_dot_d = match ProfileDotDScript::open("distrod.sh".to_owned(), &rootfs_path) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    for path in paths {
+        profile_dot_d.put_path(path);
+    }
+    profile_dot_d
+        .write()
+        .with_context(|| format!("Failed to write profile.d script under {:?}", &rootfs_path))?;
+    Ok(())
+}
+
 pub struct Distro {
-    rootfs: HostPath,
     container: Container,
 }
 
@@ -233,14 +311,7 @@ impl Distro {
     {
         log::debug!("Distro::exec_command.");
         let mut command = Command::new(command.as_ref());
-        command
-            .args(args)
-            // Adding the path to distrod bin allows us to hook "chsh" command to show the message
-            // to ask users to run "distrod enable" command.
-            .env(
-                "PATH",
-                add_distrod_bin_to_path(std::env::var("PATH").unwrap_or_default()),
-            );
+        command.args(args);
         if let Some(wd) = wd {
             command.current_dir(wd.as_ref());
         }
@@ -253,9 +324,6 @@ impl Distro {
     }
 
     pub fn stop(self, sigkill: bool) -> Result<()> {
-        if let Err(e) = cleanup_etc_environment_file(&self.rootfs) {
-            log::warn!("Failed to clean up /etc/environment. {:#?}", e);
-        }
         self.container.stop(sigkill)
     }
 }
@@ -326,97 +394,6 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     }
 
     Ok(())
-}
-
-pub fn cleanup_distro_rootfs<P: AsRef<Path>>(rootfs: P) -> Result<()> {
-    cleanup_etc_environment_file(&rootfs).with_context(|| "Failed to cleanup /etc/environment")?;
-
-    Ok(())
-}
-
-fn setup_etc_environment_file<P: AsRef<Path>>(rootfs: P) -> Result<()> {
-    let rootfs = HostPath::new(rootfs.as_ref())?;
-    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(&rootfs);
-    let mut env_file = EnvFile::open(&env_file_path)
-        .with_context(|| format!("Failed to open '{:?}'.", &&env_file_path))?;
-
-    // Set the WSL envs in the default environment variables
-    let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
-    for (key, value) in &wsl_envs {
-        env_file.put(&key.to_string_lossy(), value.to_string_lossy().to_string());
-    }
-
-    // Put the Distrod's bin dir in PATH
-    // This allows us to hook "chsh" command to show the message to ask users to run "distrod enable" command.
-    // Do nothing if the environment file has no PATH since it may affect the system path in a bad way.
-    if env_file
-        .get("PATH")
-        .map(|path| path.contains(distrod_config::get_distrod_bin_dir_path()))
-        == Some(false)
-    {
-        env_file.put(
-            "PATH",
-            add_distrod_bin_to_path(env_file.get("PATH").unwrap_or(""))
-                .to_string_lossy()
-                .to_string(),
-        );
-    }
-
-    env_file
-        .save()
-        .with_context(|| "Failed to save the environment file.")?;
-    Ok(())
-}
-
-fn cleanup_etc_environment_file<P: AsRef<Path>>(rootfs: P) -> Result<()> {
-    let rootfs = HostPath::new(rootfs.as_ref())?;
-    let env_file_path = ContainerPath::new("/etc/environment")?.to_host_path(&rootfs);
-    if !env_file_path.exists() {
-        return Ok(());
-    }
-    let mut env_file = EnvFile::open(&env_file_path)
-        .with_context(|| format!("Failed to open '{:?}'.", &&env_file_path))?;
-
-    // Set the WSL envs in the default environment variables
-    let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
-    let keys: Vec<_> = wsl_envs.keys().collect();
-    for key in keys {
-        env_file.remove(&key.to_string_lossy());
-    }
-
-    // Put the Distrod's bin dir in PATH
-    // This allows us to hook "chsh" command to show the message to ask users to run "distrod enable" command
-    if env_file
-        .get("PATH")
-        .map(|path| path.contains(distrod_config::get_distrod_bin_dir_path()))
-        == Some(true)
-    {
-        env_file.put(
-            "PATH",
-            remove_distrod_bin_from_path(env_file.get("PATH").unwrap_or("")),
-        );
-    }
-
-    env_file
-        .save()
-        .with_context(|| "Failed to save the environment file.")?;
-    Ok(())
-}
-
-fn add_distrod_bin_to_path<S: AsRef<OsStr>>(path: S) -> OsString {
-    let mut result = OsString::from(distrod_config::get_distrod_bin_dir_path());
-    result.push(":");
-    result.push(path);
-    result
-}
-
-fn remove_distrod_bin_from_path(path: &str) -> String {
-    let mut distrod_bin_path = distrod_config::get_distrod_bin_dir_path().to_owned();
-    distrod_bin_path.push(':');
-    let result = path.replace(&distrod_bin_path, "");
-    distrod_bin_path.pop();
-    distrod_bin_path.insert(0, ':');
-    result.replace(&distrod_bin_path, "")
 }
 
 fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
