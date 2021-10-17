@@ -379,14 +379,18 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
         "dhcpcd.service",
         "NetworkManager.service",
         "multipathd.service",
-        "getty@tty1.service",
     ];
     for unit in &to_be_disabled {
         if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).disable() {
             log::warn!("Faled to disable {}. Error: {:?}", unit, err);
         }
     }
-    let to_be_masked = ["systemd-remount-fs.service", "systemd-modules-load.service"];
+    let to_be_masked = [
+        "systemd-remount-fs.service",
+        "systemd-modules-load.service",
+        "getty@tty1.service",
+        "serial-getty@ttyS0.service",
+    ];
     for unit in &to_be_masked {
         if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).mask() {
             log::warn!("Faled to mask {}. Error: {:?}", unit, err);
