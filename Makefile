@@ -18,7 +18,7 @@ unit-test-linux:
 integration-test-linux:
 	cd distrod/distrod/tests; ./test_runner.sh run
 
-test-linux: lint unittest integtest
+test-linux: lint unit-test-linux integration-test-linux
 
 lint:
 	shellcheck install.sh
