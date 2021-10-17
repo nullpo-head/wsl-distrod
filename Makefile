@@ -12,9 +12,13 @@ distrod-release: distrod-bins distrod/target/release/portproxy.exe
 distrod-bins:
 	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
 
-test-linux: lint
+unit-test-linux:
 	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec
+
+integration-test-linux:
 	cd distrod/distrod/tests; ./test_runner.sh run
+
+test-linux: lint unittest integtest
 
 lint:
 	shellcheck install.sh
@@ -26,4 +30,4 @@ distrod_wsl_launcher: distrod-release
 include windows.mk
 endif
 
-.PHONY: build rootfs distrod-release distrod-bins lint test
+.PHONY: build rootfs distrod-release distrod-bins lint unit-test-linux integration-test-linux test-linux
