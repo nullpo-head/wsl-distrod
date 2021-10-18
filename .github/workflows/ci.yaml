@@ -34,7 +34,7 @@ jobs:
 
     strategy:
       matrix:
-        distro-to-test: [ubuntu, debian]
+        distro-to-test: [ubuntu, debian, archlinux, fedora, centos, mint, opensuse]
 
     steps:
       - uses: actions/checkout@v2

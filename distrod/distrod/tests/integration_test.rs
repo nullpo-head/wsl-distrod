@@ -178,13 +178,10 @@ fn test_global_ip_is_reachable() {
     // Use Python instead of simple ping because ping does not work on GitHub Actions.
     let mut sh = DISTROD_SETUP.new_command();
     sh.args(&["exec", "--", "sh", "-c"]);
-    sh.arg(format!(
-        "python3 -c '{}'",
-        gen_connection_check_python_script(&format!(
-            "http://{}",
-            &TestEnvironment::ip_addr_for_connection_test()
-        ))
-    ));
+    sh.arg(gen_connection_check_shell_script(&format!(
+        "http://{}",
+        &TestEnvironment::ip_addr_for_connection_test()
+    )));
     let child = sh.status().unwrap();
     assert!(child.success());
 }
@@ -200,10 +197,7 @@ fn test_name_can_be_resolved() {
     // Use Python instead of simple ping because ping does not work on GitHub Actions.
     let mut sh = DISTROD_SETUP.new_command();
     sh.args(&["exec", "--", "sh", "-c"]);
-    sh.arg(format!(
-        "python3 -c '{}'",
-        gen_connection_check_python_script("http://www.example.com")
-    ));
+    sh.arg(gen_connection_check_shell_script("http://www.example.com"));
     let child = sh.status().unwrap();
     assert!(child.success());
 }
@@ -244,14 +238,36 @@ fn show_debug_ip_info() {
     }
 }
 
-fn gen_connection_check_python_script(uri: &str) -> String {
-    format!(
+fn gen_connection_check_shell_script(uri: &str) -> String {
+    let mut script = String::from("if false\n then : ;\n");
+    let commands = [
+        gen_connection_check_curl_command(uri),
+        gen_connection_check_python_command(uri),
+    ];
+    for (command_name, whole_command) in commands.iter() {
+        script.push_str(&format!(
+            "elif command -v {} > /dev/null; then\n {}\n",
+            &command_name, &whole_command
+        ))
+    }
+    script.push_str("else\n exit 1\n fi");
+    eprintln!("{}", script);
+    script
+}
+
+fn gen_connection_check_curl_command(uri: &str) -> (&'static str, String) {
+    ("curl", format!("curl -s {} > /dev/null", uri))
+}
+
+fn gen_connection_check_python_command(uri: &str) -> (&'static str, String) {
+    let python_script = format!(
         "import urllib.request\n\
          import sys\n\
          res = urllib.request.urlopen(\"{}\")\n\
          sys.exit(0 if res.read() is not None else 1)",
         uri
-    )
+    );
+    ("python3", format!("python3 -c '{}'", &python_script))
 }
 
 struct DistrodSetup {
