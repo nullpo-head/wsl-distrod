@@ -344,6 +344,14 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
     let rootfs = HostPath::new(rootfs.as_ref())?;
+    do_distro_independent_initialization(&rootfs, overwrites_potential_userfiles)?;
+    do_distro_specific_initialization(&rootfs, overwrites_potential_userfiles)
+}
+
+pub fn do_distro_independent_initialization(
+    rootfs: &HostPath,
+    overwrites_potential_userfiles: bool,
+) -> Result<()> {
     // Remove systemd network configurations
     for path in glob::glob(
         &ContainerPath::new("/etc/systemd/network/*.network")?
@@ -396,6 +404,76 @@ pub fn initialize_distro_rootfs<P: AsRef<Path>>(
             log::warn!("Faled to mask {}. Error: {:?}", unit, err);
         }
     }
+
+    Ok(())
+}
+
+fn do_distro_specific_initialization(
+    rootfs: &HostPath,
+    overwrites_potential_userfiles: bool,
+) -> Result<()> {
+    use DistroName::*;
+
+    match detect_distro(rootfs).with_context(|| "Failed to detect distro.")? {
+        Debian => initialize_debian_rootfs(rootfs, overwrites_potential_userfiles),
+        _ => Ok(()),
+    }
+}
+
+enum DistroName {
+    Debian,
+    Undetected,
+}
+
+fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
+    let os_release = EnvFile::open(ContainerPath::new("/etc/os-release")?.to_host_path(&rootfs))
+        .with_context(|| "Failed to parse /etc/os-release.");
+    if let Err(ref e) = os_release {
+        if e.downcast_ref::<std::io::Error>().map(|e| e.kind())
+            == Some(std::io::ErrorKind::NotFound)
+        {
+            return Ok(DistroName::Undetected);
+        }
+    }
+    match os_release?.get_env("ID") {
+        Some("debian") => Ok(DistroName::Debian),
+        _ => Ok(DistroName::Undetected),
+    }
+}
+
+fn initialize_debian_rootfs(rootfs: &HostPath, overwrites_potential_userfiles: bool) -> Result<()> {
+    if overwrites_potential_userfiles {
+        put_readenv_in_sudo_pam(&rootfs)
+            .with_context(|| "Failed to put pam_env.so in /etc/pam.d/sudo.")?;
+    }
+    Ok(())
+}
+
+fn put_readenv_in_sudo_pam(rootfs: &HostPath) -> Result<()> {
+    // Assume that the container's '/etc/pam.d/sudo' is not effective yet, so overwriting this is safe.
+    // The calles must guarantee that the pam file is not currently used by the system, but it is initializing
+    // a new rootfs.
+    let pam_sudo_path = ContainerPath::new("/etc/pam.d/sudo")?.to_host_path(&rootfs);
+    let pam_cont = std::fs::read_to_string(&pam_sudo_path)
+        .with_context(|| format!("Failed to read {:?}", &pam_sudo_path))?;
+    if pam_cont.contains("pam_env.so") {
+        return Ok(());
+    }
+    let mut lines: Vec<_> = pam_cont.split('\n').collect();
+    lines.insert(
+        2,
+        "session    required   pam_env.so readenv=1 user_readenv=0",
+    );
+    lines.insert(
+        2,
+        "# The following line of pam_env.so is inserted by Distrod",
+    );
+
+    let mut pam_sudo = File::create(&pam_sudo_path)
+        .with_context(|| format!("Failed to open {:?}", &pam_sudo_path))?;
+    pam_sudo
+        .write_all(lines.join("\n").as_bytes())
+        .with_context(|| format!("Failed to update {:?}", &pam_sudo_path))?;
 
     Ok(())
 }

@@ -8,32 +8,44 @@ set -e
 # avoid the problem caused by nesting
 ###
 
+usage() {
+cat<<'EOS'
+Usage: test_runner.sh COMMAND [options...]
+  -k, --keep-rootfs           Keep the rootfs after the test
+  run       Run the integration test.
+  enter     Enter the namespaces for testing.
+EOS
+}
+
 main () {
     if [ "$1" != run ] && [ "$1" != enter ]; then
-        echo "Usage: $0 COMMAND" >&2
-        echo "" >&2
-        echo "COMMAND" >&2
-        echo "  - run: run the integration test." >&2
-        echo "  - enter: enter the namespace for testing." >&2
+        usage
         exit 1
     fi
     COMMAND="$1"
 
     if [ "$2" != "--unshared" ]; then
-        sudo unshare -mfp sudo -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)"
+        sudo -E unshare -mfp sudo -E -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)" "$2"
         exit $?
     else
         sudo mount -t proc none /proc  # Make it see the new PIDs
     fi
+
     ##
     # From here, this script runs in the new mount and PID namespace
     ##
 
     if [ -z "$3" ]; then
-        echo "Error: Internal usage: $0 $COMMAND --unshared path_to_cargo" >&2
+        echo "Error: Internal usage: $0 $COMMAND --unshared path_to_cargo [options...]" >&2
         exit 1
     fi
     CARGO="$3"
+
+    if [ "$4" = -k ] || [ "$4" = --keep-rootfs ]; then
+        KEEP_ROOTFS=1
+    else
+        KEEP_ROOTFS=0
+    fi
 
     prepare_for_nested_distrod
     set_pseudo_wsl_envs
@@ -51,6 +63,8 @@ main () {
     export DISTROD_IMAGE_CACHE_DIR=${DISTROD_IMAGE_CACHE_DIR:-"$(dirname "$0")/../../.cache/distrod_integration_test"}
     RELIABLE_CONNECTION_IP_ADDRESS="$(dig +short www.google.com)"
     export RELIABLE_CONNECTION_IP_ADDRESS
+    export DISTRO_TO_TEST="${DISTRO_TO_TEST:-ubuntu}"
+    echo "Testing ${DISTRO_TO_TEST}"
 
     # run the tests
     set +e
@@ -208,6 +222,10 @@ kill_distrod() {
 }
 
 remove_rootfs_dir() {
+    if [ "${KEEP_ROOTFS}" = 1 ]; then
+        echo "Keeping the rootfs at $1" >&2
+        return
+    fi
     sudo rm -rf "$1"
 }
 

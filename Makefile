@@ -16,7 +16,11 @@ unit-test-linux:
 	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec
 
 integration-test-linux:
+ifeq ($(KEEP_ROOTFS),1)
+	cd distrod/distrod/tests; ./test_runner.sh run --keep-rootfs
+else
 	cd distrod/distrod/tests; ./test_runner.sh run
+endif
 
 test-linux: lint unit-test-linux integration-test-linux
 

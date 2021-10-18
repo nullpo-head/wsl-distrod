@@ -10,13 +10,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci-on-linux:
+  unit-test-on-linux:
     name: CI on Linux
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            distrod/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: |
+          make unit-test-linux
+
+  integration-test-on-linux:
+    name: CI on Linux
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        distro-to-test: [ubuntu, debian]
 
     steps:
       - uses: actions/checkout@v2
@@ -42,9 +60,10 @@ jobs:
         run: |
           DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
           DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
-          make test-linux
+          DISTRO_TO_TEST="${{ matrix.distro-to-test }}"
+          make integration-test-linux
 
-  ci-on-windows:
+  test-on-windows:
     name: CI on Windows
     runs-on: ${{ matrix.os }}
 

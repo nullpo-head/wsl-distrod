@@ -12,7 +12,7 @@ use libs::{
 use once_cell::sync::Lazy;
 
 static DISTROD_SETUP: Lazy<DistrodSetup> = Lazy::new(|| {
-    let distrod_setup = DistrodSetup::new("ubuntu");
+    let distrod_setup = DistrodSetup::new(&TestEnvironment::distro_in_testing());
     distrod_setup.create();
     distrod_setup.start();
     std::thread::sleep(Duration::from_secs(5));
@@ -37,6 +37,12 @@ fn test_init_is_sytemd() {
 
 #[test]
 fn test_no_systemd_unit_is_failing() {
+    // "No systemd unit is failing" is a tough test. Test only some distros now.
+    let target_distros = ["ubuntu", "debian"];
+    if !target_distros.contains(&TestEnvironment::distro_in_testing().as_str()) {
+        return;
+    }
+
     let mut output = None;
     for _ in 0..10 {
         std::thread::sleep(Duration::from_secs(3));
@@ -196,7 +202,7 @@ fn test_name_can_be_resolved() {
     sh.args(&["exec", "--", "sh", "-c"]);
     sh.arg(format!(
         "python3 -c '{}'",
-        gen_connection_check_python_script("https://www.google.com")
+        gen_connection_check_python_script("http://www.example.com")
     ));
     let child = sh.status().unwrap();
     assert!(child.success());
@@ -376,18 +382,22 @@ impl TestEnvironment {
     }
 
     pub fn install_dir() -> PathBuf {
-        PathBuf::from(TestEnvironment::_get_var("DISTROD_INSTALL_DIR"))
+        PathBuf::from(TestEnvironment::get_var("DISTROD_INSTALL_DIR"))
     }
 
     pub fn image_cache_dir() -> PathBuf {
-        PathBuf::from(TestEnvironment::_get_var("DISTROD_IMAGE_CACHE_DIR"))
+        PathBuf::from(TestEnvironment::get_var("DISTROD_IMAGE_CACHE_DIR"))
     }
 
     pub fn ip_addr_for_connection_test() -> String {
-        TestEnvironment::_get_var("RELIABLE_CONNECTION_IP_ADDRESS")
+        TestEnvironment::get_var("RELIABLE_CONNECTION_IP_ADDRESS")
     }
 
-    fn _get_var(var_name: &str) -> String {
+    pub fn distro_in_testing() -> String {
+        TestEnvironment::get_var("DISTRO_TO_TEST")
+    }
+
+    fn get_var(var_name: &str) -> String {
         let env_by_testwrapper = std::env::var(var_name);
         if env_by_testwrapper.is_err() {
             panic!(
