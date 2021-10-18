@@ -61,7 +61,7 @@ main () {
     # Export environment variables the integration test expects the runner to set
     export DISTROD_INSTALL_DIR
     export DISTROD_IMAGE_CACHE_DIR=${DISTROD_IMAGE_CACHE_DIR:-"$(dirname "$0")/../../.cache/distrod_integration_test"}
-    RELIABLE_CONNECTION_IP_ADDRESS="$(dig +short www.google.com)"
+    RELIABLE_CONNECTION_IP_ADDRESS="$(dig +short www.google.com | head -n 1)"
     export RELIABLE_CONNECTION_IP_ADDRESS
     export DISTRO_TO_TEST="${DISTRO_TO_TEST:-ubuntu}"
     echo "Testing ${DISTRO_TO_TEST}"
