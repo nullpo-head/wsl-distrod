@@ -11,7 +11,7 @@ env:
 
 jobs:
   unit-test-on-linux:
-    name: CI on Linux
+    name: Unit test on Linux
     runs-on: ubuntu-latest
 
     steps:
@@ -29,7 +29,7 @@ jobs:
           make unit-test-linux
 
   integration-test-on-linux:
-    name: CI on Linux
+    name: Integration test on Linux
     runs-on: ubuntu-latest
 
     strategy:
@@ -58,9 +58,9 @@ jobs:
 
       - name: Run tests
         run: |
-          DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
-          DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
-          DISTRO_TO_TEST="${{ matrix.distro-to-test }}"
+          export DISTROD_IMAGE_CACHE_DIR="${HOME}/.distrod_integration_test/image_cache" \
+          export DISTROD_INSTALL_DIR="${HOME}/.distrod_integration_test/install" \
+          export DISTRO_TO_TEST="${{ matrix.distro-to-test }}"
           make integration-test-linux
 
   test-on-windows:
