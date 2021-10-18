@@ -240,10 +240,20 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
                 .await
                 .with_context(|| "Failed to fetch the image list.")?
         }
-        Some(path) => DistroImage {
-            image: DistroImageFile::Local(path),
-            name: "distrod".to_owned(),
-        },
+        Some(path) => {
+            let name = format!(
+                "local-{}",
+                Path::new(&path)
+                    .file_stem()
+                    .ok_or_else(|| anyhow!("image {:?} should be a file.", &path))?
+                    .to_string_lossy()
+                    .replace(".tar", "")
+            );
+            DistroImage {
+                image: DistroImageFile::Local(path),
+                name,
+            }
+        }
     };
 
     let image_name = image.name;

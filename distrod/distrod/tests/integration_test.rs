@@ -321,7 +321,7 @@ impl DistrodSetup {
 #[tokio::main]
 async fn setup_distro_image(distro_name: &str) -> PathBuf {
     let local_cache_path =
-        TestEnvironment::image_cache_dir().join(&format!("{}/rootfs.tar.xz", distro_name));
+        TestEnvironment::image_cache_dir().join(&format!("{}/{}.tar.xz", distro_name, distro_name));
     if local_cache_path.exists() {
         return local_cache_path;
     }
