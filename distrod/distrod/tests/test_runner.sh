@@ -11,7 +11,6 @@ set -e
 usage() {
 cat<<'EOS'
 Usage: test_runner.sh COMMAND [options...]
-  -k, --keep-rootfs           Keep the rootfs after the test
   run       Run the integration test.
   enter     Enter the namespaces for testing.
 EOS
@@ -25,7 +24,7 @@ main () {
     COMMAND="$1"
 
     if [ "$2" != "--unshared" ]; then
-        sudo -E unshare -mfp sudo -E -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)" "$2"
+        sudo -E unshare -mfp sudo -E -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)"
         exit $?
     else
         sudo mount -t proc none /proc  # Make it see the new PIDs
@@ -40,12 +39,6 @@ main () {
         exit 1
     fi
     CARGO="$3"
-
-    if [ "$4" = -k ] || [ "$4" = --keep-rootfs ]; then
-        KEEP_ROOTFS=1
-    else
-        KEEP_ROOTFS=0
-    fi
 
     prepare_for_nested_distrod
     set_pseudo_wsl_envs
