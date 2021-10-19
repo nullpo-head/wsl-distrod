@@ -34,7 +34,7 @@ jobs:
 
     strategy:
       matrix:
-        distro-to-test: [ubuntu, debian, archlinux, fedora, centos, mint, opensuse]
+        distro-to-test: [ubuntu, debian, archlinux, fedora, centos, kali, mint, opensuse]
 
     steps:
       - uses: actions/checkout@v2
@@ -49,7 +49,7 @@ jobs:
         with:
           path: |
             ~/.distrod_integration_test/image_cache/**/*.tar.xz
-          key: ${{ runner.os }}-test-images
+          key: ${{ runner.os }}-test-images-v2
 
       - name: Install dnsutils
         run: |

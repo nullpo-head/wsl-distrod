@@ -16,11 +16,14 @@ unit-test-linux:
 	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec
 
 integration-test-linux:
-ifeq ($(KEEP_ROOTFS),1)
-	cd distrod/distrod/tests; ./test_runner.sh run --keep-rootfs
-else
 	cd distrod/distrod/tests; ./test_runner.sh run
-endif
+
+ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos kali mint opensuse
+integration-test-linux-all-distros:
+	cd distrod/distrod/tests; \
+    for distro in $(ALL_DISTROS_IN_TESTING); do \
+		 DISTRO_TO_TEST=$${distro} ./test_runner.sh run; \
+	done
 
 test-linux: lint unit-test-linux integration-test-linux
 
@@ -34,4 +37,4 @@ distrod_wsl_launcher: distrod-release
 include windows.mk
 endif
 
-.PHONY: build rootfs distrod-release distrod-bins lint unit-test-linux integration-test-linux test-linux
+.PHONY: build rootfs distrod-release distrod-bins lint unit-test-linux integration-test-linux integration-test-linux-all-distros test-linux

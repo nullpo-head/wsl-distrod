@@ -37,15 +37,9 @@ fn test_init_is_sytemd() {
 
 #[test]
 fn test_no_systemd_unit_is_failing() {
-    // "No systemd unit is failing" is a tough test. Test only some distros now.
-    let target_distros = ["ubuntu", "debian"];
-    if !target_distros.contains(&TestEnvironment::distro_in_testing().as_str()) {
-        return;
-    }
-
     let mut output = None;
-    for _ in 0..10 {
-        std::thread::sleep(Duration::from_secs(3));
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_secs(6));
         let mut systemctl = DISTROD_SETUP.new_command();
         systemctl.args(&["exec", "systemctl", "status"]);
         output = Some(systemctl.output().unwrap());
@@ -240,23 +234,28 @@ fn show_debug_ip_info() {
 
 fn gen_connection_check_shell_script(uri: &str) -> String {
     let mut script = String::from("if false\n then : ;\n");
+    // GitHub Action doesn't allow you to use ICMP connection, so you have to
+    // test the connection by TCP or UDP.
     let commands = [
         gen_connection_check_curl_command(uri),
         gen_connection_check_python_command(uri),
+        gen_connection_check_perl_command(uri),
+        gen_connection_check_apt_fallback(uri),
+        gen_connection_check_zypper_fallback(uri),
     ];
     for (command_name, whole_command) in commands.iter() {
         script.push_str(&format!(
-            "elif command -v {} > /dev/null; then\n {}\n",
+            "elif {} > /dev/null; then\n {}\n",
             &command_name, &whole_command
         ))
     }
-    script.push_str("else\n exit 1\n fi");
+    script.push_str("else\n echo no command available >&2; exit 1\n fi");
     eprintln!("{}", script);
     script
 }
 
 fn gen_connection_check_curl_command(uri: &str) -> (&'static str, String) {
-    ("curl", format!("curl -s {} > /dev/null", uri))
+    ("command -v curl", format!("curl -s {} > /dev/null", uri))
 }
 
 fn gen_connection_check_python_command(uri: &str) -> (&'static str, String) {
@@ -267,7 +266,40 @@ fn gen_connection_check_python_command(uri: &str) -> (&'static str, String) {
          sys.exit(0 if res.read() is not None else 1)",
         uri
     );
-    ("python3", format!("python3 -c '{}'", &python_script))
+    (
+        "command -v python3",
+        format!("python3 -c '{}'", &python_script),
+    )
+}
+
+fn gen_connection_check_perl_command(uri: &str) -> (&'static str, String) {
+    (
+        "perl -e 'use LWP::Simple' 2> /dev/null",
+        format!(
+            r#"perl -e 'use LWP::Simple; $cont = get("{}"); die "" if (! defined $cont);'"#,
+            uri
+        ),
+    )
+}
+
+/// No other command is available, so fallback to apt, though doesn't check connection without name resolving.
+fn gen_connection_check_apt_fallback(uri: &str) -> (&'static str, String) {
+    if ('0'..='9').contains(&uri.chars().last().unwrap()) {
+        // this is an ip address
+        ("command -v apt", "true".to_owned())
+    } else {
+        ("command -v apt", "sudo apt update".to_owned())
+    }
+}
+
+/// No other command is available, so fallback to zypper, though doesn't check connection without name resolving.
+fn gen_connection_check_zypper_fallback(uri: &str) -> (&'static str, String) {
+    if ('0'..='9').contains(&uri.chars().last().unwrap()) {
+        // this is an ip address
+        ("command -v zypper", "true".to_owned())
+    } else {
+        ("command -v zypper", "sudo zypper refresh".to_owned())
+    }
 }
 
 struct DistrodSetup {
