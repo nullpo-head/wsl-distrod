@@ -109,13 +109,13 @@ impl DistroImageFetcher for LxdDistroVersion {
     }
 
     async fn fetch(&self) -> Result<DistroImageList> {
-        let mut dates = fetch_apache_file_list(&format!("{}amd64/cloud", &self.platform_list_url))
+        let mut dates = fetch_apache_file_list(&format!("{}amd64/default", &self.platform_list_url))
             .await
-            .with_context(|| format!("Failed to get the image for amd64/cloud. Perhaps '{}amd64/cloud' is not found?", &self.platform_list_url))?;
+            .with_context(|| format!("Failed to get the image for amd64/default. Perhaps '{}amd64/default' is not found?", &self.platform_list_url))?;
         dates.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
         let latest = &dates[0];
         let rootfs_url = format!(
-            "{}{}amd64/cloud/{}rootfs.tar.xz",
+            "{}{}amd64/default/{}rootfs.tar.xz",
             &LINUX_CONTAINERS_ORG_BASE, &self.platform_list_url, latest.url
         );
         Ok(DistroImageList::Image(DistroImage {
