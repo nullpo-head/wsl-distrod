@@ -15,7 +15,7 @@ use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
-use crate::systemdunit::SystemdUnitDisabler;
+use crate::systemdunit::{get_existing_systemd_unit, SystemdUnitDisabler, SystemdUnitOverride};
 use crate::wsl_interop::{collect_wsl_env_vars, collect_wsl_paths};
 use serde::{Deserialize, Serialize};
 
@@ -352,6 +352,17 @@ pub fn do_distro_independent_initialization(
     rootfs: &HostPath,
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
+    fix_hostname(rootfs)?;
+    disable_incompatible_systemd_network_configuration(rootfs, overwrites_potential_userfiles)?;
+    disable_incompatible_systemd_services(rootfs);
+    disable_incompatible_systemd_service_options(&rootfs);
+    Ok(())
+}
+
+fn disable_incompatible_systemd_network_configuration(
+    rootfs: &HostPath,
+    overwrites_potential_userfiles: bool,
+) -> Result<(), anyhow::Error> {
     // Remove systemd network configurations
     for path in glob::glob(
         &ContainerPath::new("/etc/systemd/network/*.network")?
@@ -363,16 +374,18 @@ pub fn do_distro_independent_initialization(
         let path = path?;
         fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
     }
-
-    // echo hostname to /etc/hostname
-    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(&rootfs);
-    let mut hostname_buf = vec![0; 64];
-    let hostname =
-        nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
-    fs::write(&hostname_path, hostname.to_str()?.as_bytes())
-        .with_context(|| format!("Failed to write hostname to '{:?}'.", &hostname_path))?;
-
-    // Remove /etc/resolv.conf
+    // Remove netplan network configurations
+    for path in glob::glob(
+        &ContainerPath::new("/etc/netplan/*.yaml")?
+            .to_host_path(&rootfs)
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| anyhow!("Failed to convert netplan network file paths."))?,
+    )? {
+        let path = path?;
+        fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
+    }
+    // Remove /etc/resolv.conf so that systemd knows it shouldn't touch resolv.conf
     if overwrites_potential_userfiles {
         let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(&rootfs);
         fs::remove_file(&resolv_conf_path)
@@ -381,8 +394,20 @@ pub fn do_distro_independent_initialization(
         File::create(&resolv_conf_path)
             .with_context(|| format!("Failed to touch '{:?}'", &resolv_conf_path))?;
     }
+    Ok(())
+}
 
-    // Disable or mask incompatible systemd services
+fn fix_hostname(rootfs: &HostPath) -> Result<(), anyhow::Error> {
+    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(&rootfs);
+    let mut hostname_buf = vec![0; 64];
+    let hostname =
+        nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
+    fs::write(&hostname_path, hostname.to_str()?.as_bytes())
+        .with_context(|| format!("Failed to write hostname to '{:?}'.", &hostname_path))?;
+    Ok(())
+}
+
+fn disable_incompatible_systemd_services(rootfs: &HostPath) {
     let to_be_disabled = [
         "dhcpcd.service",
         "NetworkManager.service",
@@ -404,8 +429,40 @@ pub fn do_distro_independent_initialization(
             log::warn!("Faled to mask {}. Error: {:?}", unit, err);
         }
     }
+}
 
-    Ok(())
+fn disable_incompatible_systemd_service_options(rootfs: &Path) {
+    let options = &[("systemd-sysusers.service", "Service", "LoadCredential")];
+
+    for (service, section, option_directive) in options {
+        let unit = match get_existing_systemd_unit(rootfs, *service).with_context(|| {
+            format!(
+                "Failed to get existing Systemd unit file of {:?}.",
+                *service
+            )
+        }) {
+            Ok(Some(unit)) => unit,
+            Ok(None) => continue,
+            Err(e) => {
+                log::warn!("{:?}", e);
+                continue;
+            }
+        };
+        if unit.lookup_by_key(*option_directive).is_none() {
+            continue;
+        }
+
+        let mut overrider = SystemdUnitOverride::default();
+        overrider.unset_directive(*section, *option_directive);
+        if let Err(e) = overrider.write(rootfs, *service).with_context(|| {
+            format!(
+                "Failed to disable option {:?} of {:?}",
+                *option_directive, *service
+            )
+        }) {
+            log::warn!("{:?}", e);
+        }
+    }
 }
 
 fn do_distro_specific_initialization(
@@ -415,13 +472,18 @@ fn do_distro_specific_initialization(
     use DistroName::*;
 
     match detect_distro(rootfs).with_context(|| "Failed to detect distro.")? {
-        Debian => initialize_debian_rootfs(rootfs, overwrites_potential_userfiles),
+        Debian | Kali => initialize_debian_rootfs(rootfs, overwrites_potential_userfiles)
+            .with_context(|| "Failed to do initialization for debian-based distros."),
+        Centos => initialize_centos_rootfs(rootfs, overwrites_potential_userfiles)
+            .with_context(|| "Failed to do initialization for centos-based distros."),
         _ => Ok(()),
     }
 }
 
 enum DistroName {
     Debian,
+    Kali,
+    Centos,
     Undetected,
 }
 
@@ -437,12 +499,15 @@ fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
     }
     match os_release?.get_env("ID") {
         Some("debian") => Ok(DistroName::Debian),
+        Some("kali") => Ok(DistroName::Kali),
+        Some("\"centos\"") | Some("centos") => Ok(DistroName::Centos),
         _ => Ok(DistroName::Undetected),
     }
 }
 
 fn initialize_debian_rootfs(rootfs: &HostPath, overwrites_potential_userfiles: bool) -> Result<()> {
     if overwrites_potential_userfiles {
+        // Ubuntu doesn't need this.
         put_readenv_in_sudo_pam(&rootfs)
             .with_context(|| "Failed to put pam_env.so in /etc/pam.d/sudo.")?;
     }
@@ -475,6 +540,33 @@ fn put_readenv_in_sudo_pam(rootfs: &HostPath) -> Result<()> {
         .write_all(lines.join("\n").as_bytes())
         .with_context(|| format!("Failed to update {:?}", &pam_sudo_path))?;
 
+    Ok(())
+}
+
+fn initialize_centos_rootfs(
+    rootfs: &HostPath,
+    _overwrites_potential_userfiles: bool,
+) -> Result<()> {
+    disable_centos_network_initialization(rootfs)
+        .with_context(|| "Failed to disable CentOS-based network initialization.")?;
+    Ok(())
+}
+
+/// Prevent the network initialization of CentOS-based distros from resetting WSL's network interfaces
+fn disable_centos_network_initialization(rootfs: &HostPath) -> Result<()> {
+    let path_to_network =
+        ContainerPath::new("/etc/sysconfig/network-scripts/ifcfg-eth0")?.to_host_path(rootfs);
+    if path_to_network.exists() {
+        let backup_name =
+            ContainerPath::new("/etc/sysconfig/network-scripts/disabled-by-distrod.ifcfg-eth0")?
+                .to_host_path(rootfs);
+        fs::rename(&path_to_network, &backup_name).with_context(|| {
+            format!(
+                "Failed to move {:?} to {:?}",
+                &path_to_network, &backup_name
+            )
+        })?;
+    }
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+pub use systemd_parser::items::SystemdUnit;
 
 pub struct SystemdUnitDisabler {
     pub name: String,
@@ -15,13 +17,13 @@ impl SystemdUnitDisabler {
         }
     }
 
-    pub fn disable(&mut self) -> Result<()> {
+    pub fn disable(&self) -> Result<()> {
         if self.is_masked()? {
             bail!("{} is masked.", self.name);
         }
         let company_units = self.get_company_units()?;
         self.remove_unit_symlinks()?;
-        for mut company_unit in company_units {
+        for company_unit in company_units {
             company_unit.disable().with_context(|| {
                 format!(
                     "Failed to disable a company unit of {}, '{}'.",
@@ -33,42 +35,46 @@ impl SystemdUnitDisabler {
         Ok(())
     }
 
-    pub fn mask(&mut self) -> Result<()> {
+    pub fn mask(&self) -> Result<()> {
         self.make_masked_unit_symlink()
     }
 
     pub fn is_masked(&self) -> Result<bool> {
-        let standard_path = self.get_standard_unit_path();
+        let local_unit_path = self.get_local_unit_path();
 
-        if !standard_path.exists() {
+        if !local_unit_path.exists() {
             return Ok(false);
         }
 
-        let file_type = fs::symlink_metadata(&standard_path)
-            .with_context(|| format!("Failed to get the symlink_metadata of {:?}", &standard_path))?
+        let file_type = fs::symlink_metadata(&local_unit_path)
+            .with_context(|| {
+                format!(
+                    "Failed to get the symlink_metadata of {:?}",
+                    &local_unit_path
+                )
+            })?
             .file_type();
         if !file_type.is_symlink() {
             return Ok(false);
         }
 
-        Ok(fs::read_link(&standard_path)
-            .with_context(|| format!("Failed to read link: {:?}", &standard_path))?
+        Ok(fs::read_link(&local_unit_path)
+            .with_context(|| format!("Failed to read link: {:?}", &local_unit_path))?
             == Path::new("/dev/null"))
     }
 
-    fn make_masked_unit_symlink(&mut self) -> Result<()> {
-        let standard_path = &self.get_standard_unit_path();
-        if standard_path.exists() {
-            fs::remove_file(&standard_path)
-                .with_context(|| format!("Failed to remove {:?}", &standard_path))?;
+    fn make_masked_unit_symlink(&self) -> Result<()> {
+        let local_unit_path = &self.get_local_unit_path();
+        if local_unit_path.exists() {
+            fs::remove_file(&local_unit_path)
+                .with_context(|| format!("Failed to remove {:?}", &local_unit_path))?;
         }
-        std::os::unix::fs::symlink("/dev/null", &self.get_standard_unit_path()).with_context(
-            || format!("Failed to symlink '{:?}'.", &self.get_standard_unit_path()),
-        )?;
+        std::os::unix::fs::symlink("/dev/null", &self.get_local_unit_path())
+            .with_context(|| format!("Failed to symlink '{:?}'.", &self.get_local_unit_path()))?;
         Ok(())
     }
 
-    fn remove_unit_symlinks(&mut self) -> Result<()> {
+    fn remove_unit_symlinks(&self) -> Result<()> {
         let links = self.collect_unit_symlinks()?;
         for link in links {
             let link = link?;
@@ -78,28 +84,25 @@ impl SystemdUnitDisabler {
     }
 
     fn collect_unit_symlinks(&self) -> Result<glob::Paths> {
-        let standard_unit_path = self.get_standard_unit_path();
+        let local_unit_path = self.get_local_unit_path();
         glob::glob(&format!(
             "{}/**/{}",
-            standard_unit_path
+            local_unit_path
                 .parent()
-                .ok_or_else(|| anyhow!(
-                    "The unit '{:?}' doesn't have parent.",
-                    &standard_unit_path
-                ))?
+                .ok_or_else(|| anyhow!("The unit '{:?}' doesn't have parent.", &local_unit_path))?
                 .to_string_lossy(),
-            standard_unit_path
+            local_unit_path
                 .file_name()
                 .ok_or_else(|| anyhow!(
                     "The unit '{:?}' doesn't have file name.",
-                    &standard_unit_path
+                    &local_unit_path
                 ))?
                 .to_string_lossy()
         ))
         .with_context(|| "Glob pattern error.")
     }
 
-    fn get_company_units(&mut self) -> Result<Vec<SystemdUnitDisabler>> {
+    fn get_company_units(&self) -> Result<Vec<SystemdUnitDisabler>> {
         let service_file = self.collect_unit_symlinks()?.next();
         if service_file.is_none() {
             return Ok(vec![]);
@@ -152,15 +155,210 @@ impl SystemdUnitDisabler {
         Ok(result)
     }
 
-    fn get_standard_unit_path(&self) -> PathBuf {
-        self.rootfs_path
-            .join("etc/systemd/system/")
-            .join(&self.name)
+    fn get_local_unit_path(&self) -> PathBuf {
+        get_local_unit_path(&self.rootfs_path, &self.name)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SystemdUnitOverride {
+    sections: HashMap<String, SystemdUnitSection>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SystemdUnitSection {
+    directives: HashMap<String, Vec<String>>,
+}
+
+impl SystemdUnitOverride {
+    pub fn put_section(&mut self, section_name: String) -> &mut Self {
+        self.sections
+            .entry(section_name)
+            .or_insert_with(SystemdUnitSection::default);
+        self
+    }
+
+    pub fn push_directive(
+        &mut self,
+        section_name: &str,
+        directive_name: &str,
+        value: String,
+    ) -> &mut Self {
+        self.get_mut_section(section_name)
+            .push_directive(directive_name, value);
+        self
+    }
+
+    pub fn unset_directive(&mut self, section_name: &str, directive_name: &str) -> &mut Self {
+        self.get_mut_section(section_name)
+            .unset_directive(directive_name);
+        self
+    }
+
+    fn get_mut_section(&mut self, section_name: &str) -> &mut SystemdUnitSection {
+        if !self.sections.contains_key(section_name) {
+            self.put_section(section_name.to_owned());
+        }
+        self.sections
+            .get_mut(section_name)
+            .expect("[BUG] put_section should be callsed beforehand.")
+    }
+
+    pub fn write<P: AsRef<Path>>(&mut self, rootfs_path: P, service_name: &str) -> Result<()> {
+        let serialized = self.serialize();
+        let override_path = get_override_conf_path(rootfs_path, service_name);
+        let override_conf_dir = override_path
+            .parent()
+            .expect("[BUG] get_override_conf_path should return a dir.");
+        fs::create_dir_all(override_conf_dir)
+            .with_context(|| format!("Failed to create dir all {:?}", &override_conf_dir))?;
+        fs::write(&override_path, serialized)
+            .with_context(|| format!("Failed to write to {:?}", &override_path))?;
+        Ok(())
+    }
+
+    fn serialize(&self) -> String {
+        let mut result = String::new();
+        for (section_name, section) in &self.sections {
+            result.push_str(&format!("[{}]\n", section_name));
+            result.push_str(&section.serialize());
+        }
+        result
+    }
+}
+
+impl SystemdUnitSection {
+    pub fn push_directive(&mut self, directive_name: &str, value: String) -> &mut Self {
+        // To override a value, you need to unset it first.
+        if !self.has_directive(directive_name) {
+            self.unset_directive(directive_name);
+        }
+        self.insert_directive(directive_name, value)
+    }
+
+    pub fn unset_directive(&mut self, directive_name: &str) -> &mut Self {
+        if let Some(directives) = self.directives.get_mut(directive_name) {
+            directives.clear();
+        }
+        self.insert_directive(directive_name, "".to_owned())
+    }
+
+    fn has_directive(&self, directive_name: &str) -> bool {
+        self.directives.contains_key(directive_name)
+    }
+
+    fn insert_directive(&mut self, directive_name: &str, value: String) -> &mut Self {
+        if !self.directives.contains_key(directive_name) {
+            self.directives.insert(directive_name.to_owned(), vec![]);
+        }
+        let directives = self
+            .directives
+            .get_mut(directive_name)
+            .expect("[BUG] directives should have at least vec![].");
+        directives.push(value);
+        self
+    }
+
+    fn serialize(&self) -> String {
+        let mut result = String::new();
+        for (directive_name, values) in &self.directives {
+            result.push_str(
+                &values
+                    .iter()
+                    .map(|value| format!("{}={}", directive_name, value))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result
+    }
+}
+
+pub fn get_existing_systemd_unit<P: AsRef<Path>>(
+    rootfs_path: P,
+    service_name: &str,
+) -> Result<Option<SystemdUnit>> {
+    Ok(match get_existing_unit_path(rootfs_path, service_name) {
+        Some(path) => Some(
+            systemd_parser::parse_string(
+                &fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read {:?}.", &path))?,
+            )
+            .with_context(|| format!("Failed to parse Systemd Unit file {:?}", &path))?,
+        ),
+        None => None,
+    })
+}
+
+fn get_override_conf_path<P: AsRef<Path>>(rootfs_path: P, service_name: &str) -> PathBuf {
+    get_local_unit_path(rootfs_path, &format!("{}.d/override.conf", service_name))
+}
+
+fn get_local_unit_path<P: AsRef<Path>>(rootfs_path: P, service_name: &str) -> PathBuf {
+    rootfs_path
+        .as_ref()
+        .join("etc/systemd/system/")
+        .join(service_name)
+}
+
+fn get_existing_unit_path<P: AsRef<Path>>(rootfs_path: P, service_name: &str) -> Option<PathBuf> {
+    let candidates = [
+        "etc/systemd/system/",
+        "usr/lib/systemd/system/",
+        "run/systemd/system/",
+    ];
+    for candidate in candidates.iter() {
+        let path = rootfs_path.as_ref().join(candidate).join(service_name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod test_systemd_unit_override {
+    use super::*;
+
+    #[test]
+    fn test_simple_override() {
+        let mut overrider = SystemdUnitOverride::default();
+        overrider.put_section("Service".to_owned());
+        assert_eq!("[Service]\n", overrider.serialize());
+
+        // put again
+        overrider.put_section("Service".to_owned());
+        assert_eq!("[Service]\n", overrider.serialize());
+
+        overrider.push_directive("Service", "Environment", "test1".to_owned());
+        assert_eq!(
+            "[Service]\nEnvironment=\nEnvironment=test1\n",
+            overrider.serialize()
+        );
+        overrider.push_directive("Service", "Environment", "test2".to_owned());
+        assert_eq!(
+            "[Service]\nEnvironment=\nEnvironment=test1\nEnvironment=test2\n",
+            overrider.serialize()
+        );
+
+        overrider.unset_directive("Service2", "Test");
+        assert_eq!(
+            "[Service]\nEnvironment=\nEnvironment=test1\nEnvironment=test2\n[Service2]\nTest=\n",
+            overrider.serialize()
+        );
+        overrider.unset_directive("Service", "Environment");
+        assert_eq!(
+            "[Service]\nEnvironment=\n[Service2]\nTest=\n",
+            overrider.serialize()
+        );
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test_systemd_unit_disabler {
     use super::*;
     use flate2::bufread::GzDecoder;
     use tempfile::*;
@@ -179,7 +377,7 @@ mod tests {
             .join(simple_unit)
             .exists());
 
-        let mut disabler = SystemdUnitDisabler::new(&tempdir, simple_unit);
+        let disabler = SystemdUnitDisabler::new(&tempdir, simple_unit);
         disabler.disable().unwrap();
 
         assert!(!unitdir_path.join(simple_unit).exists());
@@ -200,7 +398,7 @@ mod tests {
             assert!(unitdir_path.join(MULTI_USER_UNIT_NAME).join(alias).exists());
         }
 
-        let mut disabler = SystemdUnitDisabler::new(&tempdir, unit);
+        let disabler = SystemdUnitDisabler::new(&tempdir, unit);
         disabler.disable().unwrap();
 
         for alias in &aliases {
@@ -227,7 +425,7 @@ mod tests {
             assert!(unitdir_path.join(should_exist).exists());
         }
 
-        let mut disabler = SystemdUnitDisabler::new(&tempdir, unit);
+        let disabler = SystemdUnitDisabler::new(&tempdir, unit);
         disabler.disable().unwrap();
 
         for alias in &aliases {
@@ -249,7 +447,7 @@ mod tests {
             assert!(unitdir_path.join(MULTI_USER_UNIT_NAME).join(also).exists());
         }
 
-        let mut disabler = SystemdUnitDisabler::new(&tempdir, also_references[0]);
+        let disabler = SystemdUnitDisabler::new(&tempdir, also_references[0]);
         disabler.disable().unwrap();
 
         for also in &also_references {
@@ -278,7 +476,7 @@ mod tests {
             assert!(unitdir_path.join(should_exist).exists());
         }
 
-        let mut disabler = SystemdUnitDisabler::new(&tempdir, also_references[0]);
+        let disabler = SystemdUnitDisabler::new(&tempdir, also_references[0]);
         disabler.disable().unwrap();
 
         for also in &also_references {
@@ -299,8 +497,8 @@ mod tests {
         assert!(unitdir_path.join(existing_unit).exists());
         assert!(!unitdir_path.join(nonexisting_unit).exists());
 
-        let mut existing_unit_disabler = SystemdUnitDisabler::new(&tempdir, existing_unit);
-        let mut nonexisting_unit_disabler = SystemdUnitDisabler::new(&tempdir, nonexisting_unit);
+        let existing_unit_disabler = SystemdUnitDisabler::new(&tempdir, existing_unit);
+        let nonexisting_unit_disabler = SystemdUnitDisabler::new(&tempdir, nonexisting_unit);
         existing_unit_disabler.mask().unwrap();
         nonexisting_unit_disabler.mask().unwrap();
 
@@ -318,7 +516,7 @@ mod tests {
     fn setup_unit_dir() -> Result<(TempDir, PathBuf)> {
         let temp_dir = tempdir()?;
         let unit_dir = temp_dir.path().join(SYSTEMD_DIR);
-        std::fs::create_dir_all(&unit_dir).unwrap();
+        fs::create_dir_all(&unit_dir).unwrap();
 
         let tar = include_bytes!("../tests/resources/systemdunit/unit_dir.tar.gz");
         let mut tar = tar::Archive::new(GzDecoder::new(std::io::Cursor::new(tar)));
