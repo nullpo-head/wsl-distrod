@@ -316,7 +316,7 @@ def get_lib_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
 
 
 def get_license_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
-    path = get_distrod_dir_in_container("etc/licenses")
+    path = get_distrod_dir_in_container("misc/licenses")
     if inner_path:
         path = path.joinpath(inner_path)
     return path
