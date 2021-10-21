@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import tempfile
 import os
+import re
+import sys
 import subprocess
 import shutil
 from pathlib import Path
@@ -39,12 +41,39 @@ def main():
         help='Pack only /opt/distrod directory for the in-distro distrod command, instead of packing the rootfs.',
         action='store_true')
     args = parser.parse_args()
+    check_dependency_tools_availability()
     if args.pack_distrod_opt_dir:
         pack_distrod_opt_dir(Path(args.workspace_path),
                              Path(os.path.abspath(args.output_path)))
     else:
         pack_rootfs(Path(args.workspace_path),
                     Path(os.path.abspath(args.output_path)))
+
+
+def check_dependency_tools_availability():
+    tools = [
+        ("patchelf", None),
+        ("apt-file", "- apt install apt-file && apt-file update"),
+        ("cargo-about", "- cargo install --git https://github.com/EmbarkStudios/cargo-about.git --branch main\nYou need to install this from Git to get the latest version.")
+    ]
+    missing = False
+    for (command, instruction) in tools:
+        missing |= not command_is_available(command, instruction)
+    if missing:
+        sys.exit(1)
+
+
+def command_is_available(name: str, install_instruction: Optional[str]) -> bool:
+    command_v = subprocess.run(["which", name], capture_output=True)
+    if command_v.returncode == 0:
+        return True
+    sys.stderr.write(f"** '{name}' is not installed.\n")
+    if install_instruction:
+        sys.stderr.write(f"Follow the instructions below to install it.\n")
+        sys.stderr.write(install_instruction + "\n")
+    else:
+        sys.stderr.write(f"Please install {name}.")
+    return False
 
 
 def pack_rootfs(workspace_path: Path, output_path: Path):
@@ -84,6 +113,7 @@ def make_distrod_distribution(workspace_path: Path, output_dst: Path):
     for bin_name in bin_names:
         bin_path = copy_target_binary(bin_name, workspace_path, work_dir)
     copy_distrod_distribution_resources(work_dir)
+    gen_crate_lincense_file(workspace_path, work_dir)
     set_permissions(work_dir)
     set_suid(get_bin_dir_in_container("distrod-exec").to_host(work_dir))
 
@@ -97,11 +127,60 @@ def copy_target_binary(bin_name: str, workspace_path: Path, work_dir: Path) -> C
 
 
 def make_bin_static_for_linux(bin_path: Path, work_dir: Path):
-    ld_path, _ = copy_dependency_libs(bin_path, work_dir)
-    ld_path = get_ld_dir_in_container(os.path.basename(
-        extract_dependency_libs(bin_path)[0]))
-    modify_lib_search_path(bin_path,
-                           ld_path, get_lib_dir_in_container())
+    copy_dependency_lib_licenses_for_redistribution(bin_path, work_dir)
+    ld_path, libs_path = copy_dependency_libs(bin_path, work_dir)
+    modify_lib_search_path(bin_path, ld_path, libs_path)
+
+
+def copy_dependency_lib_licenses_for_redistribution(bin_path: Path, work_dir: Path):
+    ld_path, libpaths = extract_dependency_libs(bin_path)
+    for lib in [ld_path, *libpaths]:
+        copy_apt_package_copyright_for_redistribution(lib, work_dir)
+
+
+def copy_apt_package_copyright_for_redistribution(file_path: Path, work_dir: Path):
+    apt_package_name = get_apt_package_name(file_path)
+    dst_license_dir = get_license_dir_in_container(
+        f"libs/{apt_package_name}").to_host(work_dir)
+    os.makedirs(dst_license_dir, exist_ok=True)
+    system_license_path = get_apt_package_lincese_path(apt_package_name)
+    dst_license_path = dst_license_dir.joinpath(
+        os.path.basename(system_license_path))
+    convenient_alias_path = dst_license_dir.joinpath(
+        os.path.basename(file_path) + ".LICENSE")
+    if not dst_license_path.exists():
+        shutil.copy(system_license_path, dst_license_path)
+    if not convenient_alias_path.exists():
+        os.symlink(os.path.basename(dst_license_path), convenient_alias_path)
+
+
+APT_FILE_PATTERN = re.compile("^([^:]+): ")
+
+
+def get_apt_package_name(file_path: Path) -> str:
+    apt_file_out = None
+    err = ""
+    for candidate in [file_path, file_path.resolve()]:
+        command = ["apt-file", "search", "-F", str(candidate)]
+        apt_file = subprocess.run(command, capture_output=True)
+        if apt_file.returncode == 0:
+            apt_file_out = apt_file.stdout.decode(
+                "utf-8").strip().split("\n")[0]
+            break
+        err = f"apt-file failed. command: {command}, stderr: {apt_file.stderr.decode('utf-8')}"
+    if not apt_file_out:
+        raise Exception(err)
+
+    package_name_match = APT_FILE_PATTERN.search(apt_file_out)
+    if not package_name_match:
+        raise Exception(
+            f"apt-file's output has unknown format. {apt_file_out}")
+
+    return package_name_match.group(1)
+
+
+def get_apt_package_lincese_path(package_name: str) -> Path:
+    return Path(f"/usr/share/doc/{package_name}/copyright")
 
 
 def copy_dependency_libs(bin_path: Path, work_dir: Path) -> Tuple[ContainerPath, ContainerPath]:
@@ -180,6 +259,25 @@ def copy_distrod_distribution_resources(work_dir: Path):
                     get_distrod_dir_in_container().to_host(work_dir), dirs_exist_ok=True)
 
 
+def gen_crate_lincense_file(workspace_path: Path, work_dir: Path):
+    out_path = get_license_dir_in_container(
+        "crate-license.html").to_host(work_dir)
+    run_cargo_about(workspace_path, out_path)
+
+
+def run_cargo_about(workspace_path: Path, out_path: Path):
+    dir_to_back = os.getcwd()
+    os.chdir(workspace_path)
+    command = ["cargo", "about", "generate", "misc/about.hbs",  "-c",
+               "misc/about.toml", "-o", str(out_path)]
+    cargo_about = subprocess.run(command)
+    if cargo_about.returncode != 0:
+        raise Exception(
+            f"cargo-about failed. Did you make sure that you installed the"
+            f" latest cargo-about from Git, not from Crate.rs? Failed command: {command}")
+    os.chdir(dir_to_back)
+
+
 def compress_entire_tree(tree: Path, output_path: Path):
     dir_to_back = os.getcwd()
     os.chdir(tree)
@@ -212,6 +310,13 @@ def get_bin_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
 
 def get_lib_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
     path = get_distrod_dir_in_container("lib")
+    if inner_path:
+        path = path.joinpath(inner_path)
+    return path
+
+
+def get_license_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
+    path = get_distrod_dir_in_container("etc/licenses")
     if inner_path:
         path = path.joinpath(inner_path)
     return path
