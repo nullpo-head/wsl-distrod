@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
 import argparse
 import tempfile
 import os
 import subprocess
 import shutil
-from typing import Iterator, Optional, Tuple, List
+from pathlib import Path
+from typing import Union, Optional, Tuple, List
+
+
+class ContainerPath:
+    path: Path
+
+    def __init__(self, path: Union[str, Path]):
+        self.path = Path(path)
+
+    def __str__(self) -> str:
+        return str(self.path)
+
+    def joinpath(self, path: Union[str, Path]) -> ContainerPath:
+        return ContainerPath(self.path.joinpath(path))
+
+    def to_host(self, host_root: Path) -> Path:
+        relpath = self.path.relative_to("/")
+        return host_root.joinpath(relpath)
 
 
 def main():
@@ -21,115 +40,118 @@ def main():
         action='store_true')
     args = parser.parse_args()
     if args.pack_distrod_opt_dir:
-        pack_distrod_opt_dir(args.workspace_path,
-                             os.path.abspath(args.output_path))
+        pack_distrod_opt_dir(Path(args.workspace_path),
+                             Path(os.path.abspath(args.output_path)))
     else:
-        pack_rootfs(args.workspace_path, os.path.abspath(args.output_path))
+        pack_rootfs(Path(args.workspace_path),
+                    Path(os.path.abspath(args.output_path)))
 
 
-def pack_rootfs(workspace_path: str, output_path: str):
-    if not output_path.startswith("/"):
+def pack_rootfs(workspace_path: Path, output_path: Path):
+    if not output_path.is_absolute():
         raise Exception("output path should be an absolute path")
     with tempfile.TemporaryDirectory() as temp_dir:
-        work_dir = temp_dir + "/root"
+        work_dir = Path(temp_dir + "/root")
         make_rootfs(workspace_path, work_dir)
         compress_entire_tree(work_dir, output_path)
         make_dir_deletable(work_dir)
 
 
-def pack_distrod_opt_dir(workspace_path: str, output_path: str):
-    if not output_path.startswith("/"):
+def pack_distrod_opt_dir(workspace_path: Path, output_path: Path):
+    if not output_path.is_absolute():
         raise Exception("output path should be an absolute path")
     with tempfile.TemporaryDirectory() as temp_dir:
-        work_dir = temp_dir + "/root"
+        work_dir = Path(temp_dir + "/root")
         make_distrod_distribution(workspace_path, work_dir)
         compress_entire_tree(
-            work_dir + get_distrod_dir_in_container(), output_path)
+            get_distrod_dir_in_container().to_host(work_dir), output_path)
         make_dir_deletable(work_dir)
 
 
-def make_rootfs(workspace_path: str, output_dst: str):
+def make_rootfs(workspace_path: Path, output_dst: Path):
     make_minimum_mountpoints(output_dst)
     make_distrod_distribution(workspace_path, output_dst)
 
 
-def make_distrod_distribution(workspace_path: str, output_dst: str):
+def make_distrod_distribution(workspace_path: Path, output_dst: Path):
     work_dir = output_dst
     make_distrod_distribution_dirs(work_dir)
     bin_names = ["distrod", "distrod-exec", "portproxy"]
     for bin_name in bin_names:
-        make_distrod_project_static_linux(workspace_path, work_dir, bin_name)
-    make_distrod_project_static_windows(workspace_path, work_dir, "portproxy")
+        bin_path = copy_target_binary(bin_name, workspace_path, work_dir)
+        make_bin_static_for_linux(bin_path.to_host(work_dir), work_dir)
+    bin_names = ["portproxy.exe"]
+    for bin_name in bin_names:
+        bin_path = copy_target_binary(bin_name, workspace_path, work_dir)
     copy_distrod_distribution_resources(work_dir)
     set_permissions(work_dir)
-    set_suid(work_dir + get_bin_dir_in_container("distrod-exec"))
+    set_suid(get_bin_dir_in_container("distrod-exec").to_host(work_dir))
 
 
-def make_distrod_project_static_linux(workspace_path, work_dir, bin_name):
-    bin_path = copy_target_binary(bin_name, workspace_path, work_dir)
-    copy_dependency_libs(bin_name, work_dir)
+def copy_target_binary(bin_name: str, workspace_path: Path, work_dir: Path) -> ContainerPath:
+    bin_path = get_bin_dir_in_container(bin_name)
+    shutil.copy(f"{workspace_path}/target/release/{bin_name}",
+                bin_path.to_host(work_dir))
+    os.system(f"chmod a+x {bin_path.to_host(work_dir)}")
+    return bin_path
+
+
+def make_bin_static_for_linux(bin_path: Path, work_dir: Path):
+    ld_path, _ = copy_dependency_libs(bin_path, work_dir)
     ld_path = get_ld_dir_in_container(os.path.basename(
-        extract_dependency_libs(work_dir + bin_path)[0]))
-    modify_lib_search_path(work_dir + bin_path,
+        extract_dependency_libs(bin_path)[0]))
+    modify_lib_search_path(bin_path,
                            ld_path, get_lib_dir_in_container())
 
 
-def make_distrod_project_static_windows(workspace_path, work_dir, bin_name):
-    binpath = copy_target_binary(bin_name + ".exe", workspace_path, work_dir)
-    os.system(f"chmod a+x {work_dir + binpath}")
-
-
-def copy_target_binary(bin_name: str, workspace_path: str, work_dir: str) -> str:
-    shutil.copy(f"{workspace_path}/target/release/{bin_name}",
-                work_dir + get_bin_dir_in_container(bin_name))
-    return get_bin_dir_in_container(bin_name)
-
-
-def copy_dependency_libs(bin_name: str, work_dir: str):
-    distrod_bin = work_dir + get_bin_dir_in_container(bin_name)
-    ld, libs = extract_dependency_libs(distrod_bin)
-    ld_path = work_dir + get_ld_dir_in_container(os.path.basename(ld))
-    shutil.copy(ld, ld_path)
-    for lib in libs:
+def copy_dependency_libs(bin_path: Path, work_dir: Path) -> Tuple[ContainerPath, ContainerPath]:
+    ld_path, libpaths = extract_dependency_libs(bin_path)
+    dst_ld_path = get_ld_dir_in_container(
+        os.path.basename(ld_path))
+    shutil.copy(ld_path, dst_ld_path.to_host(work_dir))
+    for lib in libpaths:
         shutil.copy(
-            lib, work_dir + get_lib_dir_in_container(os.path.basename(lib)))
+            lib, get_lib_dir_in_container(os.path.basename(lib)).to_host(work_dir))
+    return (dst_ld_path, get_lib_dir_in_container())
 
 
-def extract_dependency_libs(bin_path: str) -> Tuple[str, List[str]]:
+def extract_dependency_libs(bin_path: Path) -> Tuple[Path, List[Path]]:
     ldd = subprocess.run(["ldd", bin_path], capture_output=True)
     if ldd.returncode != 0:
         raise Exception(f"ldd failed.")
     ldd_output = [l.strip() for l in ldd.stdout.decode("utf-8").splitlines()]
     ld = next(filter(lambda line: "ld-linux-x86-64" in line, ldd_output))
-    ld = ld.split(" ")[0]
+    ld = Path(ld.split(" ")[0])
 
     libs = []
     for ldd_line in filter(lambda line: "=>" in line, ldd_output):
         lib_path = ldd_line.split(" ")[2]
-        libs.append(lib_path)
+        libs.append(Path(lib_path))
 
     return (ld, libs)
 
 
-def modify_lib_search_path(bin_path: str, ld_path: str, rpath: str):
+def modify_lib_search_path(bin_path: Path, ld_path: ContainerPath, rpath: ContainerPath):
     """Patch an ELF binary by patchelf"""
-    patch_args = ["patchelf", "--set-interpreter", ld_path, bin_path]
+    patch_args: List[str] = ["patchelf",
+                             "--set-interpreter", str(ld_path), str(bin_path)]
     ret = subprocess.run(patch_args)
     if ret.returncode != 0:
         raise Exception(f"command failed. {patch_args}")
-    patch_args = ["patchelf", "--set-rpath", rpath, bin_path]
+    patch_args: List[str] = ["patchelf",
+                             "--set-rpath", str(rpath), str(bin_path)]
     ret = subprocess.run(patch_args)
     if ret.returncode != 0:
         raise Exception(f"command failed. {patch_args}")
 
 
-def make_minimum_mountpoints(work_dir: str):
-    dirs = ["/proc", "/mnt", "/run", "/sys", "/dev", "/tmp", "/etc"]
+def make_minimum_mountpoints(work_dir: Path):
+    dirs = ["proc", "mnt", "run", "sys", "dev", "tmp", "etc"]
     for dir in dirs:
-        os.makedirs(work_dir + dir)
+        os.makedirs(work_dir.joinpath(dir))
 
 
-def make_distrod_distribution_dirs(work_dir: str):
+def make_distrod_distribution_dirs(work_dir: Path):
     dirs = [
         get_distrod_dir_in_container(),
         get_distrod_dir_in_container("bin"),
@@ -137,10 +159,10 @@ def make_distrod_distribution_dirs(work_dir: str):
         get_distrod_dir_in_container("lib"),
         get_distrod_dir_in_container("ld")]
     for dir in dirs:
-        os.makedirs(work_dir + dir, exist_ok=True)
+        os.makedirs(dir.to_host(work_dir), exist_ok=True)
 
 
-def set_permissions(work_dir: str):
+def set_permissions(work_dir: Path):
     dir_to_back = os.getcwd()
     os.chdir(work_dir)
     os.system("sudo chmod 755 .")
@@ -148,25 +170,25 @@ def set_permissions(work_dir: str):
     os.chdir(dir_to_back)
 
 
-def set_suid(bin_path: str):
+def set_suid(bin_path: Path):
     os.system(f"sudo chmod u+s {bin_path}")
     os.system(f"sudo chmod g+s {bin_path}")
 
 
-def copy_distrod_distribution_resources(work_dir: str):
-    shutil.copytree(get_resources_dir(), work_dir +
-                    get_distrod_dir_in_container(), dirs_exist_ok=True)
+def copy_distrod_distribution_resources(work_dir: Path):
+    shutil.copytree(get_resources_dir(),
+                    get_distrod_dir_in_container().to_host(work_dir), dirs_exist_ok=True)
 
 
-def compress_entire_tree(tree: str, output_path: str):
+def compress_entire_tree(tree: Path, output_path: Path):
     dir_to_back = os.getcwd()
     os.chdir(tree)
     os.system("sudo tar czf compressed.tar.gz *")
-    shutil.copy(tree + "/compressed.tar.gz", output_path)
+    shutil.copy(tree.joinpath("compressed.tar.gz"), output_path)
     os.chdir(dir_to_back)
 
 
-def make_dir_deletable(tree: str):
+def make_dir_deletable(tree: Path):
     dir_to_back = os.getcwd()
     os.chdir(tree)
     # Let the directory able to be deleted
@@ -174,38 +196,38 @@ def make_dir_deletable(tree: str):
     os.chdir(dir_to_back)
 
 
-def get_resources_dir(inner_path: Optional[str] = None) -> str:
+def get_resources_dir(inner_path: Optional[str] = None) -> Path:
     path = os.path.dirname(__file__) + "/resources"
     if inner_path:
         path = f"{path}/{inner_path}"
+    return Path(path)
+
+
+def get_bin_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
+    path = get_distrod_dir_in_container("bin")
+    if inner_path:
+        path = path.joinpath(inner_path)
     return path
 
 
-def get_bin_dir_in_container(inner_path: Optional[str] = None) -> str:
-    path = "bin"
+def get_lib_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
+    path = get_distrod_dir_in_container("lib")
     if inner_path:
-        path = f"{path}/{inner_path}"
-    return get_distrod_dir_in_container(path)
+        path = path.joinpath(inner_path)
+    return path
 
 
-def get_lib_dir_in_container(inner_path: Optional[str] = None) -> str:
-    path = "lib"
+def get_ld_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
+    path = get_distrod_dir_in_container("ld")
     if inner_path:
-        path = f"{path}/{inner_path}"
-    return get_distrod_dir_in_container(path)
+        path = path.joinpath(inner_path)
+    return path
 
 
-def get_ld_dir_in_container(inner_path: Optional[str] = None) -> str:
-    path = "ld"
+def get_distrod_dir_in_container(inner_path: Optional[str] = None) -> ContainerPath:
+    path = ContainerPath("/opt/distrod")
     if inner_path:
-        path = f"{path}/{inner_path}"
-    return get_distrod_dir_in_container(path)
-
-
-def get_distrod_dir_in_container(inner_path: Optional[str] = None) -> str:
-    path = "/opt/distrod"
-    if inner_path:
-        path = f"{path}/{inner_path}"
+        path = path.joinpath(inner_path)
     return path
 
 
