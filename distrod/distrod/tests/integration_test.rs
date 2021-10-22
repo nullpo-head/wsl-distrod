@@ -312,12 +312,12 @@ fn test_wslg_socket_is_available() {
     let child = test.status().unwrap();
     assert!(child.success());
 
-    let mut file = DISTROD_SETUP.new_command();
-    file.args(&["exec", "--", "file", "/tmp/.X11-unix"]);
-    let output = file.output().unwrap();
+    let mut ls = DISTROD_SETUP.new_command();
+    ls.args(&["exec", "--", "ls", "-ld", "/tmp/.X11-unix"]);
+    let output = ls.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
-    eprintln!("{}", output);
-    assert!(output.ends_with("symbolic link to /mnt/wslg/.X11-unix\n"));
+    eprintln!("output of `ls -ld /tmp/.X11-unix`: {}", output);
+    assert!(output.ends_with("-> /mnt/wslg/.X11-unix\n"));
 }
 
 struct DistrodSetup {
