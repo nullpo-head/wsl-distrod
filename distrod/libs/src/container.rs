@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use nix::sched::CloneFlags;
 use nix::NixPath;
 use passfd::FdPassingExt;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::io::AsRawFd;
@@ -18,6 +18,8 @@ use crate::procfile::ProcFile;
 #[derive(Default, Debug, Clone)]
 pub struct ContainerLauncher {
     mounts: Vec<ContainerMount>,
+    init_envs: Vec<(OsString, OsString)>,
+    init_args: Vec<OsString>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,23 +75,32 @@ impl ContainerLauncher {
         self
     }
 
-    pub fn launch(
+    pub fn with_init_arg<O: AsRef<OsStr>>(&mut self, arg: O) -> &mut Self {
+        self.init_args.push(arg.as_ref().to_owned());
+        self
+    }
+
+    pub fn with_init_env<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.init_envs
+            .push((key.as_ref().to_owned(), value.as_ref().to_owned()));
+        self
+    }
+
+    pub fn launch<S: AsRef<OsStr>>(
         self,
-        init: Option<Vec<OsString>>,
+        init: S,
         rootfs: HostPath,
         old_root: ContainerPath,
     ) -> Result<Container> {
-        let init = init.unwrap_or_else(|| {
-            vec![
-                OsString::from("/sbin/init"),
-                OsString::from("--unit=multi-user.target"),
-            ]
-        });
-
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
-            let mut command = Command::new(&init[0]);
-            command.args(&init[1..]);
+            let mut command = Command::new(&init);
+            command.args(&self.init_args);
+            command.envs(self.init_envs.iter().map(|(k, v)| (k, v)));
             let mut command = CommandByMultiFork::new(command);
             let fds_to_keep = vec![fd_channel_child.as_raw_fd()];
             command.pre_second_fork(move || {

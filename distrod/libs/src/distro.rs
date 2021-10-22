@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::os::linux::fs::MetadataExt;
-use std::os::unix::prelude::{CommandExt, OsStrExt};
+use std::os::unix::prelude::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -44,8 +44,6 @@ impl DistroLauncher {
             .with_wsl_envs()
             .with_context(|| "failed to set up WSL env vars")?;
         distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
-        mount_kernelcmdline(&mut distro_launcher.container_launcher)
-            .with_context(|| "Failed to mount kernelcmdline.")?;
         mount_distrod_run_files(&mut distro_launcher.container_launcher)
             .with_context(|| "Failed to mount /run files.")?;
         Ok(distro_launcher)
@@ -113,10 +111,13 @@ impl DistroLauncher {
         write_session_env_files(HostPath::new(&rootfs)?, self.session_paths)
             .with_context(|| "Failed to write session env file.")?;
 
+        self.container_launcher
+            .with_init_env("container", "distrod")
+            .with_init_arg("--unit=multi-user.target");
         let container = self
             .container_launcher
             .launch(
-                None,
+                "/sbin/init",
                 HostPath::new(&rootfs)?,
                 ContainerPath::new(DISTRO_OLD_ROOT_PATH)?,
             )
@@ -136,6 +137,8 @@ impl DistroLauncher {
                 key.to_string_lossy().to_string(),
                 value.to_string_lossy().to_string(),
             );
+            self.container_launcher
+                .with_init_arg(&env_to_systemd_setenv_arg(key, value));
         }
         let wsl_paths = collect_wsl_paths().with_context(|| "Failed to collect WSL paths.")?;
         for path in wsl_paths {
@@ -227,63 +230,16 @@ fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<(
     Ok(())
 }
 
-/// Overwrite the kernel cmdline with one for the container.
-fn mount_kernelcmdline(container_launcher: &mut ContainerLauncher) -> Result<()> {
-    let new_cmdline_path = "/run/distrod-cmdline";
-    let mut new_cmdline = File::create(new_cmdline_path)
-        .with_context(|| format!("Failed to create '{}'.", new_cmdline_path))?;
-    nix::unistd::chown(
-        new_cmdline_path,
-        Some(nix::unistd::Uid::from_raw(0)),
-        Some(nix::unistd::Gid::from_raw(0)),
-    )
-    .with_context(|| format!("Failed to chown '{}'", new_cmdline_path))?;
-
-    let mut cmdline_cont =
-        std::fs::read("/proc/cmdline").with_context(|| "Failed to read /proc/cmdline.")?;
-    if cmdline_cont.ends_with("\n".as_bytes()) {
-        cmdline_cont.truncate(cmdline_cont.len() - 1);
-    }
-
-    // Set default environment vairables for the systemd services.
-    for setenv in to_systemd_setenv_args(
-        collect_wsl_env_vars()
-            .with_context(|| "Failed to collect WSL envs.")?
-            .into_iter(),
-    ) {
-        cmdline_cont.extend(" ".as_bytes());
-        cmdline_cont.extend(setenv.as_bytes());
-    }
-    cmdline_cont.extend("\n".as_bytes());
-
-    new_cmdline
-        .write_all(&cmdline_cont)
-        .with_context(|| "Failed to write the new cmdline.")?;
-
-    container_launcher.with_mount(
-        Some(HostPath::new(new_cmdline_path)?), // /run is bind-mounted
-        ContainerPath::new("/proc/cmdline")?,
-        None,
-        nix::mount::MsFlags::MS_BIND,
-        None,
-        true,
-    );
-    Ok(())
-}
-
-fn to_systemd_setenv_args<I>(env: I) -> Vec<OsString>
+fn env_to_systemd_setenv_arg<K, V>(key: K, value: V) -> OsString
 where
-    I: Iterator<Item = (OsString, OsString)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
 {
-    let mut args = vec![];
-    for (name, value) in env {
-        let mut arg = OsString::from("systemd.setenv=");
-        arg.push(name);
-        arg.push("=");
-        arg.push(value);
-        args.push(arg);
-    }
-    args
+    let mut arg = OsString::from("systemd.setenv=");
+    arg.push(key.as_ref());
+    arg.push("=");
+    arg.push(value.as_ref());
+    arg
 }
 
 fn write_system_env_files(
@@ -460,6 +416,7 @@ fn disable_incompatible_systemd_services(rootfs: &HostPath) {
         "systemd-modules-load.service",
         "getty@tty1.service",
         "serial-getty@ttyS0.service",
+        "console-getty.service",
     ];
     for unit in &to_be_masked {
         if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).mask() {
