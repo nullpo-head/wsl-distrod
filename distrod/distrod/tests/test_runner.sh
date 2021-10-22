@@ -121,8 +121,9 @@ prepare_for_nested_distrod() {
 }
 
 mount_opt_distrod() {
-    # Mount the new /opt/distrod to test
-    mount_overlay /opt/distrod
+    # Make the new /opt/distrod to test
+    mount_overlay /opt
+    mkdir -p /opt/distrod
     sudo cp -R "$(dirname "$0")"/../../../distrod_packer/resources/* /opt/distrod/
 }
 
