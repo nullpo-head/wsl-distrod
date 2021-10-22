@@ -15,7 +15,7 @@ use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct ContainerLauncher {
     mounts: Vec<ContainerMount>,
 }
@@ -53,6 +53,15 @@ impl ContainerLauncher {
         data: Option<OsString>,
         is_file: bool,
     ) -> &mut Self {
+        log::debug!(
+            "Container::with_mount source: {:?}, \
+             target: {:?}, fstype: {:?}, flags: {:?}, is_file: {:?}",
+            &source,
+            &target,
+            &fstype,
+            &flags,
+            is_file
+        );
         self.mounts.push(ContainerMount {
             source,
             target,
@@ -314,24 +323,30 @@ fn mount_nosource_fs<P: AsRef<Path>>(path: P, fstype: &str) -> Result<()> {
 
 fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Result<()> {
     let path = path.as_ref();
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("Failed to retrieve the metadata of {:?}", path));
-    let bind_target_exists = metadata.is_ok();
-    if bind_target_exists {
-        let file_type = metadata?.file_type();
-        // Replace the symlink with an empty file only if this is a file mount.
-        if file_type.is_symlink() && is_file {
-            fs::remove_file(path).with_context(|| {
-                format!(
-                    "Failed to remove the existing symlink before mounting. '{:?}'",
-                    path
-                )
-            })?;
-        }
+    let exists_and_is_symlink = fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if exists_and_is_symlink && is_file {
+        // Remove the symlink so that it is replaced with an empty file only if this is a file mount.
+        fs::remove_file(path).with_context(|| {
+            format!(
+                "Failed to remove the existing symlink before mounting. '{:?}'",
+                path
+            )
+        })?;
     }
     // this 'if' should not be 'else' because the `if` statement above could have deleted the path
     if !path.exists() {
         if is_file {
+            let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+            if !parent.exists() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create a mount point directory for {:?} inside the container.",
+                        path
+                    )
+                })?;
+            }
             File::create(path).with_context(|| {
                 format!(
                     "Failed to create a mount point file for {:?} inside the container.",

@@ -25,7 +25,9 @@ main () {
 
     if [ "$2" != "--unshared" ]; then
         sudo -E unshare -mfp sudo -E -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)"
-        exit $?
+        EXIT_CODE=$?
+        teardown_overlayfs_workdir
+        exit $EXIT_CODE
     else
         sudo mount -t proc none /proc  # Make it see the new PIDs
     fi
@@ -40,7 +42,9 @@ main () {
     fi
     CARGO="$3"
 
+    setup_overlayfs_workdir
     prepare_for_nested_distrod
+    mount_opt_distrod
     set_pseudo_wsl_envs
     NS="itestns"
     remove_pseudo_wsl_netns "$NS"  # delete netns and interfaces if there is existing ones
@@ -83,6 +87,26 @@ main () {
     exit $EXIT_CODE
 }
 
+OVERLAY_TMP_DIR=/tmp/distrod_test
+
+setup_overlayfs_workdir() {
+    sudo rm -rf "${OVERLAY_TMP_DIR}"
+    mkdir -p "${OVERLAY_TMP_DIR}"
+}
+
+teardown_overlayfs_workdir() {
+    sudo rm -rf "${OVERLAY_TMP_DIR}"
+}
+
+mount_overlay() {
+    TARGET="$1"
+    UPPER="${OVERLAY_TMP_DIR}/${TARGET}/upper"
+    WORK="${OVERLAY_TMP_DIR}/${TARGET}/work"
+    mkdir -p "${UPPER}" "${WORK}"
+    sudo mount --bind "${TARGET}" "${TARGET}"
+    sudo mount -t overlay overlay -o "lowerdir=${TARGET},upperdir=${UPPER},workdir=${WORK}" "${TARGET}"
+}
+
 prepare_for_nested_distrod() {
     # Enter a new mount namespace for testing.
     # To make distrod think it's not inside another distrod,
@@ -90,13 +114,16 @@ prepare_for_nested_distrod() {
     #    mounting overlay
     # 2. Unmount directories under /mnt/distrod_root, which is a condition 
     #    distrod checks
-    sudo rm -rf /tmp/distrod_test
-    mkdir -p /tmp/distrod_test/var/run/upper /tmp/distrod_test/var/run/work
-    sudo mount --bind /var/run /var/run
-    sudo mount -t overlay overlay -o lowerdir=/var/run,upperdir=/tmp/distrod_test/var/run/upper,workdir=/tmp/distrod_test/var/run/work /var/run
+    mount_overlay /var/run
     sudo rm -f /var/run/distrod.json
     sudo rm -f /var/run/distrod-cmdline
     sudo umount /mnt/distrod_root/proc || true  # may not exist
+}
+
+mount_opt_distrod() {
+    # Mount the new /opt/distrod to test
+    mount_overlay /opt/distrod
+    sudo cp -R "$(dirname "$0")"/../../../distrod_packer/resources/* /opt/distrod/
 }
 
 set_pseudo_wsl_envs() {

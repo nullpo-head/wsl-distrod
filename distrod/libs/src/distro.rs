@@ -28,6 +28,7 @@ pub struct DistroLauncher {
     system_envs: HashMap<String, String>,
     system_paths: HashSet<String>,
     session_paths: HashSet<String>,
+    container_launcher: ContainerLauncher,
 }
 
 impl DistroLauncher {
@@ -37,11 +38,16 @@ impl DistroLauncher {
             system_envs: HashMap::new(),
             system_paths: HashSet::new(),
             session_paths: HashSet::new(),
+            container_launcher: ContainerLauncher::new(),
         };
         distro_launcher
             .with_wsl_envs()
             .with_context(|| "failed to set up WSL env vars")?;
         distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
+        mount_kernelcmdline(&mut distro_launcher.container_launcher)
+            .with_context(|| "Failed to mount kernelcmdline.")?;
+        mount_distrod_run_files(&mut distro_launcher.container_launcher)
+            .with_context(|| "Failed to mount /run files.")?;
         Ok(distro_launcher)
     }
 
@@ -92,25 +98,23 @@ impl DistroLauncher {
         self
     }
 
-    pub fn launch(self) -> Result<Distro> {
+    pub fn launch(mut self) -> Result<Distro> {
         let rootfs = self
             .rootfs
             .ok_or_else(|| anyhow!("rootfs is not initialized."))?;
 
-        let mut container_launcher = ContainerLauncher::new();
         if rootfs != Path::new("/") {
-            mount_wsl_mountpoints(&mut container_launcher)
+            mount_wsl_mountpoints(&mut self.container_launcher)
                 .with_context(|| "Failed to mount WSL mountpoints.")?;
         }
 
-        mount_kernelcmdline(&mut container_launcher)
-            .with_context(|| "Failed to mount kernelcmdline.")?;
         write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
             .with_context(|| "Failed to write system env file.")?;
         write_session_env_files(HostPath::new(&rootfs)?, self.session_paths)
             .with_context(|| "Failed to write session env file.")?;
 
-        let container = container_launcher
+        let container = self
+            .container_launcher
             .launch(
                 None,
                 HostPath::new(&rootfs)?,
@@ -139,6 +143,39 @@ impl DistroLauncher {
         }
         Ok(self)
     }
+}
+
+fn mount_distrod_run_files(container_launcher: &mut ContainerLauncher) -> Result<()> {
+    for path in glob::glob(&format!("{}/**/*", distrod_config::get_distrod_run_dir()))
+        .with_context(|| "glob failed.")?
+    {
+        let path = path?;
+        log::trace!("mount_distrod_run_files: path: {:?}", &path);
+        if !path.is_file() {
+            continue;
+        }
+        let dest_mount_path = ContainerPath::new(
+            Path::new("/run").join(
+                path.strip_prefix(distrod_config::get_distrod_run_dir())
+                    .with_context(|| {
+                        format!(
+                            "[BUG] {:?} should starts with {:?}",
+                            &path,
+                            distrod_config::get_distrod_run_dir()
+                        )
+                    })?,
+            ),
+        )?;
+        container_launcher.with_mount(
+            Some(HostPath::new(path)?),
+            dest_mount_path,
+            None,
+            nix::mount::MsFlags::MS_BIND,
+            None,
+            true,
+        );
+    }
+    Ok(())
 }
 
 fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<()> {
@@ -355,7 +392,7 @@ pub fn do_distro_independent_initialization(
     fix_hostname(rootfs)?;
     disable_incompatible_systemd_network_configuration(rootfs, overwrites_potential_userfiles)?;
     disable_incompatible_systemd_services(rootfs);
-    disable_incompatible_systemd_service_options(&rootfs);
+    disable_incompatible_systemd_service_options(rootfs);
     Ok(())
 }
 
@@ -365,8 +402,8 @@ fn disable_incompatible_systemd_network_configuration(
 ) -> Result<(), anyhow::Error> {
     // Remove systemd network configurations
     for path in glob::glob(
-        &ContainerPath::new("/etc/systemd/network/*.network")?
-            .to_host_path(&rootfs)
+        ContainerPath::new("/etc/systemd/network/*.network")?
+            .to_host_path(rootfs)
             .as_os_str()
             .to_str()
             .ok_or_else(|| anyhow!("Failed to convert systemd network file paths."))?,
@@ -376,8 +413,8 @@ fn disable_incompatible_systemd_network_configuration(
     }
     // Remove netplan network configurations
     for path in glob::glob(
-        &ContainerPath::new("/etc/netplan/*.yaml")?
-            .to_host_path(&rootfs)
+        ContainerPath::new("/etc/netplan/*.yaml")?
+            .to_host_path(rootfs)
             .as_os_str()
             .to_str()
             .ok_or_else(|| anyhow!("Failed to convert netplan network file paths."))?,
@@ -387,7 +424,7 @@ fn disable_incompatible_systemd_network_configuration(
     }
     // Remove /etc/resolv.conf so that systemd knows it shouldn't touch resolv.conf
     if overwrites_potential_userfiles {
-        let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(&rootfs);
+        let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(rootfs);
         fs::remove_file(&resolv_conf_path)
             .with_context(|| format!("Failed to remove '{:?}'.", &resolv_conf_path))?;
         // Touch /etc/resolv.conf so that WSL over-writes it or we can do bind-mount on it
@@ -398,7 +435,7 @@ fn disable_incompatible_systemd_network_configuration(
 }
 
 fn fix_hostname(rootfs: &HostPath) -> Result<(), anyhow::Error> {
-    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(&rootfs);
+    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(rootfs);
     let mut hostname_buf = vec![0; 64];
     let hostname =
         nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
@@ -488,7 +525,7 @@ enum DistroName {
 }
 
 fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
-    let os_release = EnvFile::open(ContainerPath::new("/etc/os-release")?.to_host_path(&rootfs))
+    let os_release = EnvFile::open(ContainerPath::new("/etc/os-release")?.to_host_path(rootfs))
         .with_context(|| "Failed to parse /etc/os-release.");
     if let Err(ref e) = os_release {
         if e.downcast_ref::<std::io::Error>().map(|e| e.kind())
@@ -508,7 +545,7 @@ fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
 fn initialize_debian_rootfs(rootfs: &HostPath, overwrites_potential_userfiles: bool) -> Result<()> {
     if overwrites_potential_userfiles {
         // Ubuntu doesn't need this.
-        put_readenv_in_sudo_pam(&rootfs)
+        put_readenv_in_sudo_pam(rootfs)
             .with_context(|| "Failed to put pam_env.so in /etc/pam.d/sudo.")?;
     }
     Ok(())
@@ -518,7 +555,7 @@ fn put_readenv_in_sudo_pam(rootfs: &HostPath) -> Result<()> {
     // Assume that the container's '/etc/pam.d/sudo' is not effective yet, so overwriting this is safe.
     // The calles must guarantee that the pam file is not currently used by the system, but it is initializing
     // a new rootfs.
-    let pam_sudo_path = ContainerPath::new("/etc/pam.d/sudo")?.to_host_path(&rootfs);
+    let pam_sudo_path = ContainerPath::new("/etc/pam.d/sudo")?.to_host_path(rootfs);
     let pam_cont = std::fs::read_to_string(&pam_sudo_path)
         .with_context(|| format!("Failed to read {:?}", &pam_sudo_path))?;
     if pam_cont.contains("pam_env.so") {

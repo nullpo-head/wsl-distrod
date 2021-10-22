@@ -302,6 +302,24 @@ fn gen_connection_check_zypper_fallback(uri: &str) -> (&'static str, String) {
     }
 }
 
+#[test]
+fn test_wslg_socket_is_available() {
+    // Wait for a while until Systemd initializes /tmp
+    std::thread::sleep(Duration::from_secs(15));
+
+    let mut test = DISTROD_SETUP.new_command();
+    test.args(&["exec", "--", "test", "-e", "/run/tmpfiles.d/x11.conf"]);
+    let child = test.status().unwrap();
+    assert!(child.success());
+
+    let mut file = DISTROD_SETUP.new_command();
+    file.args(&["exec", "--", "file", "/tmp/.X11-unix"]);
+    let output = file.output().unwrap();
+    let output = String::from_utf8_lossy(&output.stdout);
+    eprintln!("{}", output);
+    assert!(output.ends_with("symbolic link to /mnt/wslg/.X11-unix\n"));
+}
+
 struct DistrodSetup {
     name: String,
     bin_path: PathBuf,
@@ -334,6 +352,8 @@ impl DistrodSetup {
     fn start(&self) {
         let mut distrod = self.new_command();
         distrod.args(&[
+            "-l",
+            "trace",
             "start",
             "--rootfs",
             self.install_dir.as_path().to_str().unwrap(),

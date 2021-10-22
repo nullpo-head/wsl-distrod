@@ -92,11 +92,11 @@ pub fn get_distrod_exec_bin_path() -> &'static str {
     DISTROD_EXEC_BIN_PATH.as_str()
 }
 
-static DISTROD_ETC_DIR_PAH: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "etc"));
+static DISTROD_RUN_DIR_PAH: Lazy<String> = Lazy::new(|| format!("{}/{}", DISTROD_ROOT_DIR, "run"));
 
-/// The path to the directory where the systemd services are stored.
-pub fn get_distrod_systemd_service_dir() -> &'static str {
-    DISTROD_ETC_DIR_PAH.as_str()
+/// The path to the directory where the static files to be located on /run directory
+pub fn get_distrod_run_dir() -> &'static str {
+    DISTROD_RUN_DIR_PAH.as_str()
 }
 
 static DISTROD_CONF_DIR_PAH: Lazy<String> =
