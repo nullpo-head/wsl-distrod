@@ -219,7 +219,9 @@ impl SystemdUnitOverride {
 
     fn serialize(&self) -> String {
         let mut result = String::new();
-        for (section_name, section) in &self.sections {
+        let mut sections = self.sections.iter().collect::<Vec<_>>();
+        sections.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (section_name, section) in sections {
             result.push_str(&format!("[{}]\n", section_name));
             result.push_str(&section.serialize());
         }
