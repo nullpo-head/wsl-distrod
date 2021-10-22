@@ -272,7 +272,7 @@ impl<'a> PathVariable<'a> {
         }
         self.added_paths.push(path_val);
         self.path_set
-            .insert(&self.added_paths[self.added_paths.len() - 1]);
+            .insert(self.added_paths[self.added_paths.len() - 1]);
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &str> {

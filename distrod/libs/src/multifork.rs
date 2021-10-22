@@ -173,7 +173,7 @@ impl ProxyProcess {
                 .ok_or_else(|| anyhow!("status.code() is None unexpectedly."))?
                 as u8;
             let exit_code = vec![exit_code];
-            if let Err(e) = self.pipe_for_exitcode.write_all(&&exit_code) {
+            if let Err(e) = self.pipe_for_exitcode.write_all(&exit_code) {
                 log::debug!("Failed to write the exit code to the pipe. {}", e);
             }
             std::process::exit(0);

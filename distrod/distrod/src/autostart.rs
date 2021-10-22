@@ -69,7 +69,7 @@ fn generate_task_xml(user_name: &str, distro_name: &str) -> Result<(NamedTempFil
     let mut task_xml = Template::new(String::from_utf8_lossy(bytes).into_owned());
     task_xml
         .assign("USER_NAME", user_name)
-        .assign("DISTRO_NAME", &distro_name)
+        .assign("DISTRO_NAME", distro_name)
         .assign("TASK_NAME", &format!("StartDistrod_{}", &distro_name));
     let mut task_xml_file = NamedTempFile::new().with_context(|| "Failed to create temp file.")?;
 

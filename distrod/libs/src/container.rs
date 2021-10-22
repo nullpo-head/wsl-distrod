@@ -155,10 +155,7 @@ impl ContainerLauncher {
         for mount in &self.mounts {
             create_mountpoint_unless_exist(mount.target.as_path(), mount.is_file)
                 .with_context(|| format!("Failed to create mountpoint {:?}", mount.target))?;
-            let source = mount
-                .source
-                .as_ref()
-                .map(|p| p.to_container_path(&old_root));
+            let source = mount.source.as_ref().map(|p| p.to_container_path(old_root));
             nix::mount::mount(
                 source.as_ref().map(|p| p.as_path()),
                 mount.target.as_path(),
@@ -193,7 +190,7 @@ impl Container {
         command.pre_second_fork(|| {
             enter_namespace(&self.init_procfile)
                 .with_context(|| "Failed to enter the init's namespace")?;
-            if let Some(ref cred) = cred {
+            if let Some(cred) = cred {
                 cred.drop_privilege();
             }
             Ok(())
@@ -278,7 +275,7 @@ fn prepare_minimum_root(new_root: &HostPath, old_root: &ContainerPath) -> Result
     }
     nix::mount::mount::<Path, Path, Path, Path>(
         Some(new_root.as_ref()),
-        &new_root.as_ref(),
+        new_root.as_ref(),
         None,
         nix::mount::MsFlags::MS_BIND,
         None,
@@ -368,8 +365,7 @@ fn create_mountpoint_unless_exist<P: AsRef<Path>>(path: P, is_file: bool) -> Res
 #[allow(clippy::unnecessary_wraps)]
 fn umount_host_mountpoints(old_root: &ContainerPath, mount_entries: &[MountEntry]) -> Result<()> {
     let mut mount_paths: Vec<&PathBuf> = mount_entries.iter().map(|e| &e.path).collect();
-    #[allow(clippy::clippy::unnecessary_sort_by)]
-    mount_paths.sort_by(|a, b| b.len().cmp(&a.len())); // reverse sort
+    mount_paths.sort_by_key(|b| std::cmp::Reverse(b.len())); // reverse sort
     for mount_path in mount_paths {
         if !mount_path.starts_with(&old_root) || mount_path.as_path() == old_root.as_path() {
             continue;

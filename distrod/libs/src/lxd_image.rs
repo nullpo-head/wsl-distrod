@@ -160,7 +160,7 @@ async fn fetch_apache_file_list(relative_url: &str) -> Result<Vec<FileOnApache>>
                 name,
                 url,
                 last_modified: NaiveDateTime::parse_from_str(
-                    &dates[i + 1]
+                    dates[i + 1]
                         .text()
                         .next()
                         .ok_or_else(|| {

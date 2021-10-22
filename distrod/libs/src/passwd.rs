@@ -24,7 +24,7 @@ impl Credential {
 
     pub fn from_user(cred: IdCredential, passwd_file: &mut PasswdFile) -> Result<Credential> {
         let passwd = match cred {
-            IdCredential::Name(name) => passwd_file.get_ent_by_name(&name)?,
+            IdCredential::Name(name) => passwd_file.get_ent_by_name(name)?,
             IdCredential::Uid(uid) => passwd_file.get_ent_by_uid(uid)?,
         };
         if passwd.is_none() {

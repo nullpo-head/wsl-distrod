@@ -13,7 +13,7 @@ impl ProcFile {
     pub fn current_proc() -> Result<ProcFile> {
         let procfile =
             ProcFile::from_proc_dir("self").with_context(|| "Failed to open /proc/self.")?;
-        Ok(procfile.ok_or_else(|| anyhow!("/proc/self doesn't exist."))?)
+        procfile.ok_or_else(|| anyhow!("/proc/self doesn't exist."))
     }
 
     #[allow(dead_code)]
