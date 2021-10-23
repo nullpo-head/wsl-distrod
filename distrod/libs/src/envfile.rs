@@ -81,15 +81,19 @@ impl EnvShellScript {
 
     fn gen_shell_script(&self) -> String {
         let mut script = String::new();
-        for (key, value) in &self.envs {
+        let mut envs: Vec<(_, _)> = self.envs.iter().collect();
+        envs.sort_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b));
+        for (key, value) in envs {
             script.push_str(&format!(
-                r#"if [ -z "${{{}:-}}" ]; then export {}={}; fi\n"#,
+                "if [ -z \"${{{}:-}}\" ]; then export {}={}; fi\n",
                 key, key, value
             ));
         }
-        for path in &self.paths {
+        let mut paths: Vec<_> = self.paths.iter().collect();
+        paths.sort();
+        for path in paths {
             script.push_str(&format!(
-                r#"if [ "${{PATH#*:{}:}}" != "${{PATH}}" ]; then export PATH={}:$PATH; fi\n"#,
+                "if [ \"${{PATH#*:{}:}}\" != \"${{PATH}}\" ]; then export PATH={}:$PATH; fi\n",
                 path, path
             ));
         }
@@ -281,6 +285,34 @@ impl<'a> PathVariable<'a> {
             .rev()
             .chain(self.parsed_paths.iter())
             .copied()
+    }
+}
+
+#[cfg(test)]
+mod test_env_shell_script {
+    use super::*;
+
+    #[test]
+    fn test_simple_env_shell_script() {
+        let mut env_shell_script = EnvShellScript::new();
+        env_shell_script.put_env("var1".to_owned(), "val1".to_owned());
+        env_shell_script.put_env("var2".to_owned(), "val2".to_owned());
+        env_shell_script.put_env("var_space".to_owned(), "value with space".to_owned());
+        env_shell_script.put_env("var2".to_owned(), "val2 again".to_owned());
+
+        env_shell_script.put_path("/path/to/somewhere".to_owned());
+        env_shell_script.put_path("/path/with space/somewhere".to_owned());
+        env_shell_script.put_path("/path/to/somewhere".to_owned());
+
+        let script = env_shell_script.gen_shell_script();
+        assert_eq!(
+            script,
+            "if [ -z \"${var1:-}\" ]; then export var1=val1; fi\n\
+             if [ -z \"${var2:-}\" ]; then export var2=val2 again; fi\n\
+             if [ -z \"${var_space:-}\" ]; then export var_space=value with space; fi\n\
+             if [ \"${PATH#*:/path/to/somewhere:}\" != \"${PATH}\" ]; then export PATH=/path/to/somewhere:$PATH; fi\n\
+             if [ \"${PATH#*:/path/with space/somewhere:}\" != \"${PATH}\" ]; then export PATH=/path/with space/somewhere:$PATH; fi\n"
+        );
     }
 }
 
