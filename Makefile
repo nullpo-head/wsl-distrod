@@ -22,7 +22,7 @@ enter-integration-test-env:
 	@echo Run 'cargo test -p distrod'.
 	cd distrod/distrod/tests; ./test_runner.sh enter
 
-ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos almalinux rockylinux kali mint opensuse amazonlinux oracle
+ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos almalinux rockylinux kali mint opensuse amazonlinux oracle gentoo
 integration-test-linux-all-distros:
 	cd distrod/distrod/tests; \
     for distro in $(ALL_DISTROS_IN_TESTING); do \

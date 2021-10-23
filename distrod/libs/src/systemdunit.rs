@@ -310,6 +310,7 @@ fn get_existing_unit_path<P: AsRef<Path>>(rootfs_path: P, service_name: &str) ->
     let candidates = [
         "etc/systemd/system/",
         "usr/lib/systemd/system/",
+        "lib/systemd/system/",
         "run/systemd/system/",
     ];
     for candidate in candidates.iter() {

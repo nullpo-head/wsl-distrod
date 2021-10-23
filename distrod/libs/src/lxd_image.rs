@@ -109,14 +109,23 @@ impl DistroImageFetcher for LxdDistroVersion {
     }
 
     async fn fetch(&self) -> Result<DistroImageList> {
-        let mut dates = fetch_apache_file_list(&format!("{}amd64/default", &self.platform_list_url))
+        let variant = match self.distro_name.as_str() {
+            "gentoo" => "amd64/systemd",
+            _ => "amd64/default",
+        };
+        let mut dates = fetch_apache_file_list(&format!("{}{}", &self.platform_list_url, variant))
             .await
-            .with_context(|| format!("Failed to get the image for amd64/default. Perhaps '{}amd64/default' is not found?", &self.platform_list_url))?;
+            .with_context(|| {
+                format!(
+                    "Failed to get the image for {}. Perhaps '{}{}' is not found?",
+                    variant, &self.platform_list_url, variant
+                )
+            })?;
         dates.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
         let latest = &dates[0];
         let rootfs_url = format!(
-            "{}{}amd64/default/{}rootfs.tar.xz",
-            &LINUX_CONTAINERS_ORG_BASE, &self.platform_list_url, latest.url
+            "{}{}{}/{}rootfs.tar.xz",
+            &LINUX_CONTAINERS_ORG_BASE, &self.platform_list_url, variant, latest.url
         );
         Ok(DistroImageList::Image(DistroImage {
             name: format!("{}-{}", &self.distro_name, &self.version_name),
