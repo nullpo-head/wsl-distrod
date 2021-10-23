@@ -37,34 +37,40 @@ fn test_init_is_sytemd() {
 
 #[test]
 fn test_no_systemd_unit_is_failing() {
-    let mut output = None;
-    for _ in 0..20 {
-        std::thread::sleep(Duration::from_secs(6));
+    let query_systemctl = || -> std::process::Output {
         let mut systemctl = DISTROD_SETUP.new_command();
         systemctl.args(&["exec", "systemctl", "status"]);
-        output = Some(systemctl.output().unwrap());
-
-        let o = &output.as_ref().unwrap();
+        systemctl.output().unwrap()
+    };
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_secs(6));
+        let output = query_systemctl();
         eprintln!(
             "Querying systemctl's status. stdout: '{}', stderr: '{}'",
-            String::from_utf8_lossy(&o.stdout)
+            String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .take(4)
                 .collect::<Vec<_>>()
                 .join("\n"),
-            String::from_utf8_lossy(&o.stderr)
+            String::from_utf8_lossy(&output.stderr)
         );
 
-        if !String::from_utf8_lossy(&output.as_ref().unwrap().stdout).contains("State:") {
+        if !String::from_utf8_lossy(&output.stdout).contains("State:") {
             continue;
         }
-        if !String::from_utf8_lossy(&output.as_ref().unwrap().stdout).contains("State: starting") {
+        if !String::from_utf8_lossy(&output.stdout).contains("State: starting") {
             break;
         }
     }
     // Output debug information for the case that the test fails.
+    let output = query_systemctl();
     show_debug_systemd_info();
-    assert!(String::from_utf8_lossy(&output.unwrap().stdout).contains("State: running"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("State: running"));
+    // Check that one more time in 1 minute to see if there are any units that have crashed
+    std::thread::sleep(Duration::from_secs(60));
+    let output = query_systemctl();
+    show_debug_systemd_info();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("State: running"));
 }
 
 fn show_debug_systemd_info() {
