@@ -11,13 +11,8 @@ env:
 jobs:
   publish-release_assets:
     name: Publish the release assets
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
     needs: [build-distrod_wsl_launcher]
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v2
@@ -60,13 +55,8 @@ jobs:
 
   build-distrod_wsl_launcher:
     name: Build Distrod WSL launcher
-    runs-on: ${{ matrix.os }}
-
+    runs-on: windows-latest
     needs: [build-distrod-command]
-
-    strategy:
-      matrix:
-        os: [windows-latest]
 
     defaults:
       run:
@@ -105,13 +95,9 @@ jobs:
 
   build-distrod-command:
     name: Build distrod Linux command
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     needs: [build-portproxy-exe]
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v2
@@ -134,10 +120,13 @@ jobs:
           name: "portproxy-${{ env.ARCH_NAME }}"
           path: distrod/target/release
 
-      - name: Install patchelf
+      - name: Install dependencies
         run: |
           sudo apt-get update
+          sudo apt-get upgrade
           sudo apt-get install -y patchelf
+          sudo apt-get install -y apt-file; sudo apt-file update
+          cargo install --git https://github.com/EmbarkStudios/cargo-about.git --branch main
 
       - name: Build the Distrod command
         run: make distrod-release
@@ -161,11 +150,7 @@ jobs:
 
   build-portproxy-exe:
     name: Build portproxy.exe
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [windows-latest]
+    runs-on: windows-latest
 
     defaults:
       run:
