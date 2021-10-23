@@ -112,7 +112,7 @@ impl DistroLauncher {
             .with_context(|| "Failed to write session env file.")?;
 
         self.container_launcher
-            .with_init_env("container", "distrod")
+            .with_init_env("container", "distrod") // See https://systemd.io/CONTAINER_INTERFACE/
             .with_init_arg("--unit=multi-user.target");
         let container = self
             .container_launcher
@@ -468,8 +468,10 @@ fn do_distro_specific_initialization(
     match detect_distro(rootfs).with_context(|| "Failed to detect distro.")? {
         Debian | Kali => initialize_debian_rootfs(rootfs, overwrites_potential_userfiles)
             .with_context(|| "Failed to do initialization for debian-based distros."),
-        Centos => initialize_centos_rootfs(rootfs, overwrites_potential_userfiles)
-            .with_context(|| "Failed to do initialization for centos-based distros."),
+        Centos | Oracle | AlmaLinux | RockyLinux => {
+            initialize_centos_rootfs(rootfs, overwrites_potential_userfiles)
+                .with_context(|| "Failed to do initialization for centos-based distros.")
+        }
         _ => Ok(()),
     }
 }
@@ -478,6 +480,9 @@ enum DistroName {
     Debian,
     Kali,
     Centos,
+    AlmaLinux,
+    Oracle,
+    RockyLinux,
     Undetected,
 }
 
@@ -491,12 +496,26 @@ fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
             return Ok(DistroName::Undetected);
         }
     }
-    match os_release?.get_env("ID") {
+    match os_release?.get_env("ID").map(strip_quotes) {
         Some("debian") => Ok(DistroName::Debian),
         Some("kali") => Ok(DistroName::Kali),
-        Some("\"centos\"") | Some("centos") => Ok(DistroName::Centos),
+        Some("centos") => Ok(DistroName::Centos),
+        Some("almalinux") => Ok(DistroName::AlmaLinux),
+        Some("ol") => Ok(DistroName::Oracle),
+        Some("rocky") => Ok(DistroName::RockyLinux),
         _ => Ok(DistroName::Undetected),
     }
+}
+
+fn strip_quotes(s: &str) -> &str {
+    let mut result = s;
+    if s.starts_with('"') {
+        result = &result[1..result.len()];
+    }
+    if s.ends_with('"') {
+        result = &result[0..result.len() - 1];
+    }
+    result
 }
 
 fn initialize_debian_rootfs(rootfs: &HostPath, overwrites_potential_userfiles: bool) -> Result<()> {

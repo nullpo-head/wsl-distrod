@@ -34,8 +34,19 @@ jobs:
 
     strategy:
       matrix:
-        distro-to-test: [ubuntu, debian, archlinux, fedora, centos, kali, mint, opensuse]
-
+        distro-to-test:
+          - ubuntu
+          - debian
+          - archlinux
+          - fedora
+          - centos
+          - almalinux
+          - rockylinux
+          - kali
+          - mint
+          - opensuse
+          - amazonlinux
+          - oracle
     steps:
       - uses: actions/checkout@v2
       - uses: actions/cache@v2

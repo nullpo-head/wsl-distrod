@@ -18,7 +18,11 @@ unit-test-linux:
 integration-test-linux:
 	cd distrod/distrod/tests; ./test_runner.sh run
 
-ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos kali mint opensuse
+enter-integration-test-env:
+	@echo Run 'cargo test -p distrod'.
+	cd distrod/distrod/tests; ./test_runner.sh enter
+
+ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos almalinux rockylinux kali mint opensuse amazonlinux oracle
 integration-test-linux-all-distros:
 	cd distrod/distrod/tests; \
     for distro in $(ALL_DISTROS_IN_TESTING); do \
