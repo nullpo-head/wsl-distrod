@@ -86,21 +86,30 @@ impl EnvShellScript {
         for (key, value) in envs {
             script.push_str(&format!(
                 "if [ -z \"${{{}:-}}\" ]; then export {}={}; fi\n",
-                key, key, value
+                key,
+                key,
+                single_quote_str_for_shell(value)
             ));
         }
         let mut paths: Vec<_> = self.paths.iter().collect();
         paths.sort();
         for path in paths {
             script.push_str(&format!(
-                "if [ \"${{PATH#*:{}:}}\" != \"${{PATH}}\" ]; then export PATH={}:$PATH; fi\n",
-                path, path
+                "__CANDIDATE_PATH={}\n\
+                 __COLON_PATH=\":${{PATH}}:\"\n\
+                 if [ \"${{__COLON_PATH#*:${{__CANDIDATE_PATH}}:}}\" = \"${{__COLON_PATH}}\" ]; then export PATH=\"${{__CANDIDATE_PATH}}:${{PATH}}\"; fi\n\
+                 unset __CANDIDATE_PATH\n\
+                 unset __COLON_PATH\n",
+                single_quote_str_for_shell(path)
             ));
         }
         script
     }
 }
 
+fn single_quote_str_for_shell(s: &str) -> String {
+    format!("'{}'", s.replace("'", "'\"'\"'"))
+}
 #[derive(Debug, Clone)]
 pub struct EnvFile {
     pub file_path: PathBuf,
@@ -306,12 +315,52 @@ mod test_env_shell_script {
 
         let script = env_shell_script.gen_shell_script();
         assert_eq!(
-            script,
-            "if [ -z \"${var1:-}\" ]; then export var1=val1; fi\n\
-             if [ -z \"${var2:-}\" ]; then export var2=val2 again; fi\n\
-             if [ -z \"${var_space:-}\" ]; then export var_space=value with space; fi\n\
-             if [ \"${PATH#*:/path/to/somewhere:}\" != \"${PATH}\" ]; then export PATH=/path/to/somewhere:$PATH; fi\n\
-             if [ \"${PATH#*:/path/with space/somewhere:}\" != \"${PATH}\" ]; then export PATH=/path/with space/somewhere:$PATH; fi\n"
+            "if [ -z \"${var1:-}\" ]; then export var1='val1'; fi\n\
+             if [ -z \"${var2:-}\" ]; then export var2='val2 again'; fi\n\
+             if [ -z \"${var_space:-}\" ]; then export var_space='value with space'; fi\n\
+             __CANDIDATE_PATH='/path/to/somewhere'\n\
+             __COLON_PATH=\":${PATH}:\"\n\
+             if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${__CANDIDATE_PATH}:${PATH}\"; fi\n\
+             unset __CANDIDATE_PATH\n\
+             unset __COLON_PATH\n\
+             __CANDIDATE_PATH='/path/with space/somewhere'\n\
+             __COLON_PATH=\":${PATH}:\"\n\
+             if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${__CANDIDATE_PATH}:${PATH}\"; fi\n\
+             unset __CANDIDATE_PATH\n\
+             unset __COLON_PATH\n",
+            &script
+        );
+    }
+
+    #[test]
+    fn test_script_by_shell() {
+        let mut env_shell_script = EnvShellScript::new();
+        env_shell_script.put_env("var_space".to_owned(), "value with space".to_owned());
+        env_shell_script.put_env("existing_var".to_owned(), "updated".to_owned());
+        env_shell_script.put_path("/path/to/somewhere".to_owned());
+        env_shell_script.put_path("/path/with space/somewhere".to_owned());
+        env_shell_script.put_path("/path/with space/somewhere".to_owned());
+        env_shell_script.put_path("/bin".to_owned());
+
+        let mut script = env_shell_script.gen_shell_script();
+        script.push_str(
+            "\
+            echo $var_space\n\
+            echo $existing_var\n\
+            echo $PATH\n\
+        ",
+        );
+
+        let mut shell = std::process::Command::new("sh");
+        shell.arg("-c");
+        shell.arg(&script);
+        shell.env("existing_var", "not updated");
+        shell.env("PATH", "/usr/local/bin:/sbin:/bin");
+        let output = shell.output().unwrap();
+        eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(
+            "value with space\nnot updated\n/path/with space/somewhere:/path/to/somewhere:/usr/local/bin:/sbin:/bin\n",
+            &String::from_utf8_lossy(&output.stdout)
         );
     }
 }
