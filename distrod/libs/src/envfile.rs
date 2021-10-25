@@ -6,9 +6,9 @@ use nom::{
         is_alphanumeric, is_newline,
     },
     combinator::{map_res, opt, recognize},
-    error::VerboseError,
     multi::{many1, separated_list0},
     sequence::{pair, separated_pair, terminated, tuple},
+    IResult,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct ProfileDotDScript {
@@ -149,28 +149,32 @@ struct EnvStatement {
 
 impl EnvFile {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<EnvFile> {
-        let (envs, env_file_lines) = match File::open(path.as_ref()) {
-            Ok(file) => {
-                let mut reader = BufReader::new(file);
-                let mut buf = vec![];
-                reader
-                    .read_to_end(&mut buf)
-                    .with_context(|| format!("Failed to read {:?}", path.as_ref()))?;
-                let (_, env_file_lines) = EnvFileLines::parse(&buf)
-                    .map_err(|e| anyhow!("Failed to parse a line: {:?}", e))?;
-                let mut envs = HashMap::<String, usize>::default();
-                env_file_lines.iter().enumerate().for_each(|(i, line)| {
-                    if let EnvFileLine::Env(env) = line {
-                        envs.insert(env.key.clone(), i);
-                    };
-                });
-                (envs, env_file_lines)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                (HashMap::<String, usize>::default(), EnvFileLines::default())
-            }
-            Err(e) => bail!(e),
-        };
+        let file = File::open(path.as_ref());
+        if matches!(file, Err(ref e) if e.kind() == std::io::ErrorKind::NotFound) {
+            return Ok(EnvFile {
+                file_path: path.as_ref().to_owned(),
+                envs: HashMap::<String, usize>::default(),
+                env_file_lines: EnvFileLines::default(),
+            });
+        }
+
+        let file = file.with_context(|| format!("Failed to open {:?}", path.as_ref()))?;
+        let mut reader = BufReader::new(file);
+        let mut buf = vec![];
+        reader
+            .read_to_end(&mut buf)
+            .with_context(|| format!("Failed to read {:?}", path.as_ref()))?;
+
+        let env_file_lines = EnvFileLines::parse(&buf)
+            .map_err(|e| anyhow!("Failed to parse a line: {:?}", e))?
+            .1;
+        let mut envs = HashMap::<String, usize>::default();
+        for (i, line) in env_file_lines.iter().enumerate() {
+            if let EnvFileLine::Env(env) = line {
+                envs.insert(env.key.clone(), i);
+            };
+        }
+
         Ok(EnvFile {
             file_path: path.as_ref().to_owned(),
             envs,
@@ -241,8 +245,6 @@ impl EnvFile {
         Ok(())
     }
 }
-
-type IResult<I, O> = nom::IResult<I, O, VerboseError<I>>;
 
 impl EnvFileLines {
     pub fn parse(input: &[u8]) -> IResult<&[u8], EnvFileLines> {
