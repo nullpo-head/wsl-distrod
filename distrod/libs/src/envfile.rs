@@ -1,12 +1,25 @@
+use nom::{
+    branch::alt,
+    bytes::complete::{is_not, tag, take, take_while, take_while1},
+    character::{
+        complete::{char, line_ending, none_of, space0, space1},
+        is_alphanumeric, is_newline,
+    },
+    combinator::{map_res, opt, recognize},
+    error::VerboseError,
+    multi::{many1, separated_list0},
+    sequence::{pair, separated_pair, terminated, tuple},
+};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
+    ops::{Deref, DerefMut},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct ProfileDotDScript {
@@ -107,51 +120,100 @@ impl EnvShellScript {
     }
 }
 
-fn single_quote_str_for_shell(s: &str) -> String {
-    format!("'{}'", s.replace("'", "'\"'\"'"))
-}
+/// EnvFile understands /etc/environment at about the same level as pam_env.so,
+/// so that it can modify the value of existing environment variables or add new ones.
+/// (See https://github.com/linux-pam/linux-pam/blob/master/modules/pam_env/pam_env.c)
 #[derive(Debug, Clone)]
 pub struct EnvFile {
     pub file_path: PathBuf,
-    // Vec for abnormal files which contains duplicated env definitions.
-    // u64 for the index of the line.
-    envs: HashMap<String, Vec<(usize, String)>>,
+    envs: HashMap<String, usize>,
+    env_file_lines: EnvFileLines,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EnvFileLines(Vec<EnvFileLine>);
+
+#[derive(Debug, Clone)]
+enum EnvFileLine {
+    Env(EnvStatement),
+    Other(String),
+}
+
+#[derive(Debug, Clone)]
+struct EnvStatement {
+    key: String,
+    value: String,
+    leading_characters: String,
+    following_characters: String,
 }
 
 impl EnvFile {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<EnvFile> {
-        let envs =
-            match parse_env_file(path.as_ref()).with_context(|| "Failed to parse an env file.") {
-                Ok(envs) => envs,
-                Err(e)
-                    if e.downcast_ref::<std::io::Error>().map(|e| e.kind())
-                        == Some(std::io::ErrorKind::NotFound) =>
-                {
-                    HashMap::<String, Vec<(usize, String)>>::default()
-                }
-                Err(e) => bail!(e),
-            };
+        let (envs, env_file_lines) = match File::open(path.as_ref()) {
+            Ok(file) => {
+                let mut reader = BufReader::new(file);
+                let mut buf = vec![];
+                reader
+                    .read_to_end(&mut buf)
+                    .with_context(|| format!("Failed to read {:?}", path.as_ref()))?;
+                let (_, env_file_lines) = EnvFileLines::parse(&buf)
+                    .map_err(|e| anyhow!("Failed to parse a line: {:?}", e))?;
+                let mut envs = HashMap::<String, usize>::default();
+                env_file_lines.iter().enumerate().for_each(|(i, line)| {
+                    if let EnvFileLine::Env(env) = line {
+                        envs.insert(env.key.clone(), i);
+                    };
+                });
+                (envs, env_file_lines)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (HashMap::<String, usize>::default(), EnvFileLines::default())
+            }
+            Err(e) => bail!(e),
+        };
         Ok(EnvFile {
             file_path: path.as_ref().to_owned(),
             envs,
+            env_file_lines,
         })
     }
 
     pub fn get_env(&self, key: &str) -> Option<&str> {
-        let val = self.envs.get(key)?;
-        // return the value of the last line.
-        Some(val.last()?.1.as_str())
+        let val = match self.env_file_lines[*self.envs.get(key)?] {
+            EnvFileLine::Env(ref env_statement) => env_statement.value.as_str(),
+            _ => unreachable!(),
+        };
+        Some(val)
     }
 
     pub fn put_env(&mut self, key: String, value: String) {
-        if let Some(existing_vals) = self.envs.get_mut(&key) {
-            if !existing_vals.is_empty() {
-                let (line, _) = existing_vals.pop().expect("val is not empty");
-                existing_vals.push((line, value));
-                return;
+        // we don't allow to put values for safety, otherwise it will confuse pam_env.so and
+        // let other variables be overwritten.
+        assert!(!value.contains('\n') && !value.contains('\\'));
+
+        let line_index = self.envs.get(&key);
+        let value = single_quote_str_for_shell(&value);
+        match line_index {
+            Some(index) => {
+                let line = &mut self.env_file_lines[*index];
+                match *line {
+                    EnvFileLine::Env(ref mut env_statement) => {
+                        env_statement.value = value;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            None => {
+                let line = EnvFileLine::Env(EnvStatement {
+                    key: key.clone(),
+                    value,
+                    leading_characters: String::new(),
+                    following_characters: String::new(),
+                });
+                self.env_file_lines.push(line);
+                self.envs.insert(key, self.env_file_lines.len() - 1);
             }
         }
-        self.envs.insert(key, vec![(usize::MAX, value)]);
     }
 
     pub fn put_path(&mut self, path_val: String) {
@@ -165,70 +227,130 @@ impl EnvFile {
         self.put_env("PATH".to_owned(), pathenv_value);
     }
 
-    pub fn remove_env(&mut self, key: &str) {
-        self.envs.remove(key);
-    }
-
     pub fn write(&mut self) -> Result<()> {
-        let lines = self.serialize_to_env_file();
         let mut file = BufWriter::new(
             File::create(&self.file_path)
                 .with_context(|| format!("Failed to create {:?}.", &self.file_path))?,
         );
-        for line in lines {
-            file.write_all(line.1.as_bytes())?;
-        }
+        file.write_all(self.env_file_lines.serialize().as_bytes())?;
         Ok(())
-    }
-
-    fn serialize_to_env_file(&mut self) -> Vec<(usize, String)> {
-        let serialize_env = |key: &str, vals: &Vec<(usize, String)>| -> Vec<(usize, String)> {
-            vals.iter()
-                .map(|(line_num, val)| (*line_num, format!("{}={}\n", key, val)))
-                .collect::<Vec<(usize, String)>>()
-        };
-        let mut lines = self
-            .envs
-            .iter()
-            .flat_map(|(key, vals)| serialize_env(key, vals))
-            .collect::<Vec<(usize, String)>>();
-        lines.sort();
-        lines
     }
 }
 
-fn parse_env_file<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Vec<(usize, String)>>> {
-    let mut envs: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-    let reader = BufReader::new(
-        File::open(path.as_ref()).with_context(|| format!("Failed to open {:?}", path.as_ref()))?,
-    );
-    for (i, line) in reader.lines().enumerate() {
-        let line = line.with_context(|| "Failed to read a line.")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let sep_i = line.find('=');
-        if sep_i.is_none() {
-            log::debug!(
-                "invalid /etc/environment file. No '=' is found. line: {}.",
-                i
-            );
-            continue;
-        }
-        let sep_i = sep_i.unwrap();
-        let env_name = &line[0..sep_i];
-        let env_value = &line[sep_i + 1..];
+type IResult<I, O> = nom::IResult<I, O, VerboseError<I>>;
 
-        match envs.get_mut(env_name) {
-            Some(vals) => {
-                vals.push((i, env_value.to_owned()));
-            }
-            None => {
-                envs.insert(env_name.to_owned(), vec![(i, env_value.to_owned())]);
-            }
+impl EnvFileLines {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], EnvFileLines> {
+        if input.is_empty() {
+            return Ok((&[], EnvFileLines(vec![])));
+        }
+        map_res::<_, _, _, _, nom::Err<&[u8]>, _, _>(many1(EnvFileLine::parse), |lines| {
+            Ok(EnvFileLines(lines))
+        })(input)
+    }
+
+    pub fn serialize(&self) -> String {
+        let lines = self.0.iter().map(|l| l.serialize()).collect::<Vec<_>>();
+        lines.join("")
+    }
+}
+
+impl Deref for EnvFileLines {
+    type Target = Vec<EnvFileLine>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for EnvFileLines {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl EnvFileLine {
+    pub fn parse(line: &[u8]) -> IResult<&[u8], EnvFileLine> {
+        let other_line = map_res::<_, _, _, _, nom::Err<&[u8]>, _, _>(
+            alt((
+                // line with a comment or other strings with or without a line ending
+                terminated(recognize(many1(is_not("\n"))), opt(line_ending)),
+                // empty line
+                map_res::<_, _, _, _, nom::Err<&[u8]>, _, _>(line_ending, |_| {
+                    Ok(<&[u8]>::default())
+                }),
+            )),
+            |s| {
+                Ok(EnvFileLine::Other(
+                    String::from_utf8_lossy(s).to_string() + "\n",
+                ))
+            },
+        );
+        let env = map_res::<_, _, _, _, nom::Err<&[u8]>, _, _>(EnvStatement::parse, |s| {
+            Ok(EnvFileLine::Env(s))
+        });
+        alt((env, other_line))(line)
+    }
+
+    pub fn serialize(&self) -> String {
+        match *self {
+            EnvFileLine::Env(ref env) => env.serialize(),
+            EnvFileLine::Other(ref other) => other.clone(),
         }
     }
-    Ok(envs)
+}
+
+impl EnvStatement {
+    pub fn parse(line: &[u8]) -> IResult<&[u8], EnvStatement> {
+        let (rest, (leading_characters, (key, value), following_characters, _)) = tuple((
+            leading_characters,
+            separated_pair(declaration_key, tag("="), declaration_value),
+            following_characters,
+            opt(line_ending),
+        ))(line)?;
+        let to_string = |s: &[u8]| -> String { String::from_utf8_lossy(s).to_string() };
+        Ok((
+            rest,
+            EnvStatement {
+                key: to_string(key),
+                value: to_string(value),
+                leading_characters: to_string(leading_characters),
+                following_characters: to_string(following_characters),
+            },
+        ))
+    }
+
+    pub fn serialize(&self) -> String {
+        let mut serialized_line = self.leading_characters.clone();
+        serialized_line.push_str(&self.key);
+        serialized_line.push('=');
+        serialized_line.push_str(&self.value);
+        serialized_line.push_str(&self.following_characters);
+        serialized_line.push('\n');
+        serialized_line
+    }
+}
+
+fn leading_characters(line: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(tuple((space0, opt(tag(b"export")), space0)))(line)
+}
+
+fn declaration_key(line: &[u8]) -> IResult<&[u8], &[u8]> {
+    take_while1(is_alphanumeric)(line)
+}
+
+fn declaration_value(line: &[u8]) -> IResult<&[u8], &[u8]> {
+    //let regular_char = take_while(|c| !is_space(c) && !is_newline(c) && c != b'#');
+    let escaped_char = recognize(pair(char('\\'), take(1u32)));
+    let regular_char = recognize(none_of("\n# \t\\"));
+    recognize(separated_list0(
+        space1,
+        many1(alt((regular_char, escaped_char))),
+    ))(line)
+}
+
+fn following_characters(line: &[u8]) -> IResult<&[u8], &[u8]> {
+    take_while(|c| !is_newline(c))(line)
 }
 
 #[derive(Debug, Clone)]
@@ -236,7 +358,7 @@ pub struct PathVariable<'a> {
     parsed_paths: Vec<&'a str>,
     added_paths: Vec<&'a str>,
     path_set: HashSet<&'a str>,
-    has_surrounding_quote: bool,
+    surrounding_quote: Option<char>,
 }
 
 impl<'a> PathVariable<'a> {
@@ -244,14 +366,16 @@ impl<'a> PathVariable<'a> {
         let mut paths: Vec<_> = val.split(':').into_iter().collect();
 
         // Roughly regard the whole path is surrounded by double quotes by simple logic
-        let has_surrounding_quote = paths
-            .first()
-            .map_or(false, |path| path.starts_with('"') && !path.ends_with('"'))
-            && paths
-                .last()
-                .map_or(false, |path| !path.starts_with('"') && path.ends_with('"'));
+        let quote_candidates = vec!['"', '\''];
+        let surrounding_quote = quote_candidates.into_iter().find(|quote| {
+            paths.first().map_or(false, |path| {
+                path.starts_with(*quote) && !path.ends_with(*quote)
+            }) && paths.last().map_or(false, |path| {
+                !path.starts_with(*quote) && path.ends_with(*quote)
+            })
+        });
 
-        if has_surrounding_quote {
+        if surrounding_quote.is_some() {
             paths[0] = &paths[0][1..];
             let len = paths.len();
             paths[len - 1] = &paths[len - 1][..paths[len - 1].len() - 1];
@@ -266,17 +390,17 @@ impl<'a> PathVariable<'a> {
             parsed_paths: paths,
             added_paths: vec![],
             path_set: HashSet::<&str>::new(),
-            has_surrounding_quote,
+            surrounding_quote,
         }
     }
 
     pub fn serialize(&self) -> String {
-        let paths = self.iter().collect::<Vec<_>>().join(":");
-        if self.has_surrounding_quote {
-            format!("\"{}\"", &paths)
-        } else {
-            paths
+        let mut paths = self.iter().collect::<Vec<_>>().join(":");
+        if let Some(quote) = self.surrounding_quote {
+            paths.insert(0, quote);
+            paths.push(quote);
         }
+        paths
     }
 
     pub fn put_path(&mut self, path_val: &'a str) {
@@ -295,6 +419,10 @@ impl<'a> PathVariable<'a> {
             .chain(self.parsed_paths.iter())
             .copied()
     }
+}
+
+fn single_quote_str_for_shell(s: &str) -> String {
+    format!("'{}'", s.replace("'", "'\"'\"'"))
 }
 
 #[cfg(test)]
@@ -401,8 +529,7 @@ mod test_path_variable {
         // quoted simple value
         let path_value = "\"/usr/local/bin:/usr/bin:/sbin:/bin\"";
         let mut path = PathVariable::parse(path_value);
-        assert_eq!(path_value, path.serialize().as_str());
-
+        assert_eq!(path_value, path.serialize());
         assert_eq!(
             vec!["/usr/local/bin", "/usr/bin", "/sbin", "/bin"],
             path.iter().collect::<Vec<&str>>()
@@ -417,13 +544,32 @@ mod test_path_variable {
             ),
             path.serialize()
         );
+
+        // single quote
+        let path_value = "'/usr/local/bin:/usr/bin:/sbin:/bin'";
+        let mut path = PathVariable::parse(path_value);
+        path.put_path("/new/path1/bin");
+        assert_eq!(
+            "'/new/path1/bin:/usr/local/bin:/usr/bin:/sbin:/bin'",
+            path.serialize()
+        );
+        assert_eq!(
+            vec![
+                "/new/path1/bin",
+                "/usr/local/bin",
+                "/usr/bin",
+                "/sbin",
+                "/bin"
+            ],
+            path.iter().collect::<Vec<&str>>()
+        );
     }
 
     #[test]
     fn test_value_not_quoted_as_a_whole() {
         let path_value = "\"/mnt/c/Program Files/foo\":/usr/local/bin:/usr/bin:/sbin:/bin";
         let path = PathVariable::parse(path_value);
-        assert_eq!(path_value, path.serialize().as_str());
+        assert_eq!(path_value, path.serialize());
 
         assert_eq!(
             vec![
@@ -438,7 +584,7 @@ mod test_path_variable {
 
         let path_value = "/usr/local/bin:/usr/bin:/sbin:/bin:\"/mnt/c/Program Files/foo\"";
         let path = PathVariable::parse(path_value);
-        assert_eq!(path_value, path.serialize().as_str());
+        assert_eq!(path_value, path.serialize());
 
         assert_eq!(
             vec![
@@ -453,7 +599,7 @@ mod test_path_variable {
 
         let path_value = "\"/usr/local/bin\":/usr/bin:/sbin:/bin:\"/mnt/c/Program Files/foo\"";
         let path = PathVariable::parse(path_value);
-        assert_eq!(path_value, path.serialize().as_str());
+        assert_eq!(path_value, path.serialize());
 
         assert_eq!(
             vec![
@@ -470,23 +616,165 @@ mod test_path_variable {
         // quoted "as a whole"
         let path_value = "\"/bin\"";
         let mut path = PathVariable::parse(path_value);
-        assert_eq!(path_value, path.serialize().as_str());
+        assert_eq!(path_value, path.serialize());
 
         assert_eq!(vec!["\"/bin\""], path.iter().collect::<Vec<&str>>());
 
         path.put_path("/new/path1/bin");
         path.put_path("/new/path2/bin");
-        assert_eq!(
-            "/new/path2/bin:/new/path1/bin:\"/bin\"",
-            path.serialize().as_str()
-        );
+        assert_eq!("/new/path2/bin:/new/path1/bin:\"/bin\"", path.serialize());
 
         // Don't support too tricky values
         let path_value =
             "\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"";
         let mut path = PathVariable::parse(path_value);
         path.put_path("/usr/local/bin");
-        assert_ne!("/usr/local/bin:\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"", path.serialize().as_str());
+        assert_ne!("/usr/local/bin:\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"", path.serialize());
+    }
+}
+
+#[cfg(test)]
+mod test_env_file_parsers {
+    use super::*;
+
+    #[test]
+    fn test_parse_env_statement_simple() {
+        let (_, statement) = EnvStatement::parse("PATH=hoge:fuga:piyo".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!("hoge:fuga:piyo", statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!("", statement.following_characters);
+        assert_eq!("PATH=hoge:fuga:piyo\n", statement.serialize());
+
+        // same value with new line
+        let (_, statement) = EnvStatement::parse("PATH=hoge:fuga:piyo\n".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!("hoge:fuga:piyo", statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!("", statement.following_characters);
+        assert_eq!("PATH=hoge:fuga:piyo\n", statement.serialize());
+
+        // with comment and exprot
+        let (_, statement) =
+            EnvStatement::parse(" export  PATH=hoge:fuga:piyo  # comment".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!("hoge:fuga:piyo", statement.value);
+        assert_eq!(" export  ", statement.leading_characters);
+        assert_eq!("  # comment", statement.following_characters);
+        assert_eq!(
+            " export  PATH=hoge:fuga:piyo  # comment\n",
+            statement.serialize()
+        );
+    }
+
+    #[test]
+    fn test_parse_env_statement_empty() {
+        assert!(EnvStatement::parse("".as_bytes()).is_err());
+
+        let (_, statement) = EnvStatement::parse("PATH=".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!("", statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!("", statement.following_characters);
+        assert_eq!("PATH=\n", statement.serialize());
+
+        let (_, statement) = EnvStatement::parse("export PATH=  # no value".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!("", statement.value);
+        assert_eq!("export ", statement.leading_characters);
+        assert_eq!("  # no value", statement.following_characters);
+        assert_eq!("export PATH=  # no value\n", statement.serialize());
+    }
+
+    #[test]
+    fn test_parse_env_statement_continued_line() {
+        let val = "hoge:fuga:piyo\\\n\
+                         :new_line";
+        let line = format!("PATH={}  # and comment\n", val);
+        let (_, statement) = EnvStatement::parse(line.as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("PATH", statement.key);
+        assert_eq!(val, statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!("  # and comment", statement.following_characters);
+        assert_eq!(line, statement.serialize());
+    }
+
+    #[test]
+    fn test_parse_env_statement_strange() {
+        let (_, statement) = EnvStatement::parse("VAR=A=B=C".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("VAR", statement.key);
+        assert_eq!("A=B=C", statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!("", statement.following_characters);
+        assert_eq!("VAR=A=B=C\n", statement.serialize());
+
+        let (_, statement) = EnvStatement::parse("VAR=A B C # comment".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("VAR", statement.key);
+        assert_eq!("A B C", statement.value);
+        assert_eq!("", statement.leading_characters);
+        assert_eq!(" # comment", statement.following_characters);
+        assert_eq!("VAR=A B C # comment\n", statement.serialize());
+
+        let (_, statement) = EnvStatement::parse("export VAR=😀 # emoji 😀".as_bytes()).unwrap();
+        eprintln!("Statement: {:#?}", &statement);
+        assert_eq!("VAR", statement.key);
+        assert_eq!("😀", statement.value);
+        assert_eq!("export ", statement.leading_characters);
+        assert_eq!(" # emoji 😀", statement.following_characters);
+        assert_eq!("export VAR=😀 # emoji 😀\n", statement.serialize());
+    }
+
+    #[test]
+    fn test_parse_env_file_line() {
+        let (_, line) = EnvFileLine::parse("# this is comment".as_bytes()).unwrap();
+        eprintln!("line: {:#?}", &line);
+        assert!(matches!(line, EnvFileLine::Other(_)));
+        if let EnvFileLine::Other(str) = &line {
+            assert_eq!("# this is comment\n", str);
+        }
+        assert_eq!("# this is comment\n", line.serialize());
+
+        // empty line
+        let (_, line) = EnvFileLine::parse("\n".as_bytes()).unwrap();
+        eprintln!("line: {:#?}", &line);
+        assert!(matches!(line, EnvFileLine::Other(_)));
+        assert_eq!("\n", line.serialize());
+
+        // abnormal line
+        let (_, line) = EnvFileLine::parse("==fawe=f= =".as_bytes()).unwrap();
+        eprintln!("line: {:#?}", &line);
+        assert!(matches!(line, EnvFileLine::Other(_)));
+        assert_eq!("==fawe=f= =\n", line.serialize());
+    }
+
+    #[test]
+    fn test_parse_env_file_lines() {
+        let src = "\
+        # This is comment\n\
+        VAR=VALUE\n\
+        \n\
+        \n\
+        # another comment \n\
+        PATH=path1:path2\\\n\
+        path3";
+        let (_, lines) = EnvFileLines::parse(src.as_bytes()).unwrap();
+        eprintln!("lines: {:#?}", &lines);
+        assert_eq!(lines.len(), 6);
+        assert!(matches!(lines[0], EnvFileLine::Other(_)));
+        assert!(matches!(lines[1], EnvFileLine::Env(_)));
+        assert!(matches!(lines[2], EnvFileLine::Other(_)));
+        assert!(matches!(lines[3], EnvFileLine::Other(_)));
+        assert!(matches!(lines[4], EnvFileLine::Other(_)));
+        assert!(matches!(lines[5], EnvFileLine::Env(_)));
+        assert_eq!(format!("{}\n", src), lines.serialize())
     }
 }
 
@@ -508,6 +796,7 @@ mod test_env_file {
         write!(&mut tmp, "{}", cont).unwrap();
         let env = EnvFile::open(tmp.path()).unwrap();
 
+        eprintln!("EnvFile: {:#?}", &env);
         assert_eq!(env.get_env("None"), None);
         assert_eq!(env.get_env("PATH"), Some("test:foo:bar"));
         assert_eq!(env.get_env("BAZ"), Some("baz=baz"));
@@ -522,8 +811,10 @@ mod test_env_file {
     fn test_put_and_save() {
         let mut tmp = NamedTempFile::new().unwrap();
         let cont = "\
-		    PATH=test:foo:bar\n\
+            # This is a comment line
+		    PATH=test:foo:bar  #comment preserved \n\
 			FOO=foo\n\
+            # This is another comment line
 			BAR=bar\n\
 			BAZ=baz=baz\n\
 			FOO=foo2\n\
@@ -539,18 +830,20 @@ mod test_env_file {
         env.put_env("FOO".to_owned(), "foo3".to_owned());
 
         assert_eq!(env.get_env("None"), None);
-        assert_eq!(env.get_env("NEW1"), Some("NEW1"));
-        assert_eq!(env.get_env("PATH"), Some("path:test:foo:bar"));
-        assert_eq!(env.get_env("FOO"), Some("foo3"));
+        assert_eq!(env.get_env("NEW1"), Some("'NEW1'"));
+        assert_eq!(env.get_env("PATH"), Some("'path:test:foo:bar'"));
+        assert_eq!(env.get_env("FOO"), Some("'foo3'"));
 
         env.write().unwrap();
         let expected = "\
-		    PATH=path:test:foo:bar\n\
+            # This is a comment line
+		    PATH='path:test:foo:bar'  #comment preserved \n\
 			FOO=foo\n\
+            # This is another comment line
 			BAR=bar\n\
 			BAZ=baz=baz\n\
-			FOO=foo3\n\
-			NEW1=NEW1\n\
+			FOO='foo3'\n\
+			NEW1='NEW1'\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(new_cont, expected);
@@ -566,7 +859,7 @@ mod test_env_file {
         env.put_env("TEST".to_owned(), "VALUE".to_owned());
         env.write().unwrap();
         let expected = "\
-		    TEST=VALUE\n\
+		    TEST='VALUE'\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(new_cont, expected);
@@ -582,7 +875,7 @@ mod test_env_file {
         env.put_env("TEST".to_owned(), "VALUE".to_owned());
         env.write().unwrap();
         let expected = "\
-		    TEST=VALUE\n\
+		    TEST='VALUE'\n\
 		";
         let new_cont = std::fs::read_to_string(tmpdir.path().join("dont_exist")).unwrap();
         assert_eq!(new_cont, expected);
