@@ -99,6 +99,9 @@ impl ContainerLauncher {
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
             let mut command = Command::new(&init);
+            // Systemd must not inherit environment variables from the parent process which may
+            // be launcehd by a non-root user.
+            command.env_clear();
             command.args(&self.init_args);
             command.envs(self.init_envs.iter().map(|(k, v)| (k, v)));
             let mut command = CommandByMultiFork::new(command);
