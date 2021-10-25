@@ -188,11 +188,27 @@ impl EnvFile {
 
     pub fn put_env(&mut self, key: String, value: String) {
         // we don't allow to put values for safety, otherwise it will confuse pam_env.so and
-        // let other variables be overwritten.
+        // may let other variables be overwritten.
         assert!(!value.contains('\n') && !value.contains('\\'));
+        self.put_env_with_no_sanity_check(key, single_quote_str_for_shell(&value))
+    }
 
+    pub fn put_path(&mut self, path_val: String) {
+        assert!(!path_val
+            .chars()
+            .any(|chr| ['"', '\'', '\\', '\n'].contains(&chr)));
+        const DEFAULT_PATH: &str = "'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games'";
+        let pathenv_value = {
+            let mut path_variable =
+                PathVariable::parse(self.get_env("PATH").unwrap_or(DEFAULT_PATH));
+            path_variable.put_path(&path_val);
+            path_variable.serialize()
+        };
+        self.put_env_with_no_sanity_check("PATH".to_owned(), pathenv_value);
+    }
+
+    fn put_env_with_no_sanity_check(&mut self, key: String, value: String) {
         let line_index = self.envs.get(&key);
-        let value = single_quote_str_for_shell(&value);
         match line_index {
             Some(index) => {
                 let line = &mut self.env_file_lines[*index];
@@ -214,17 +230,6 @@ impl EnvFile {
                 self.envs.insert(key, self.env_file_lines.len() - 1);
             }
         }
-    }
-
-    pub fn put_path(&mut self, path_val: String) {
-        const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games";
-        let pathenv_value = {
-            let mut path_variable =
-                PathVariable::parse(self.get_env("PATH").unwrap_or(DEFAULT_PATH));
-            path_variable.put_path(&path_val);
-            path_variable.serialize()
-        };
-        self.put_env("PATH".to_owned(), pathenv_value);
     }
 
     pub fn write(&mut self) -> Result<()> {
@@ -395,12 +400,28 @@ impl<'a> PathVariable<'a> {
     }
 
     pub fn serialize(&self) -> String {
-        let mut paths = self.iter().collect::<Vec<_>>().join(":");
+        let mut path_var = self
+            .added_paths
+            .iter()
+            .map(|path| self.quote_path_if_necessary(path))
+            .rev()
+            .chain(self.parsed_paths.iter().map(|path| path.to_string()))
+            .collect::<Vec<_>>()
+            .join(":");
+
         if let Some(quote) = self.surrounding_quote {
-            paths.insert(0, quote);
-            paths.push(quote);
+            path_var.insert(0, quote);
+            path_var.push(quote);
         }
-        paths
+
+        path_var
+    }
+
+    fn quote_path_if_necessary(&self, path: &str) -> String {
+        if self.surrounding_quote.is_none() {
+            return single_quote_str_for_shell(path);
+        }
+        path.to_owned()
     }
 
     pub fn put_path(&mut self, path_val: &'a str) {
@@ -507,7 +528,7 @@ mod test_path_variable {
         path.put_path("/new/path2/bin");
         path.put_path("/new/path2/bin"); // Put the same path again
         assert_eq!(
-            format!("/new/path2/bin:/new/path1/bin:{}", path_value),
+            format!("'/new/path2/bin':'/new/path1/bin':{}", path_value),
             path.serialize()
         );
 
@@ -620,16 +641,19 @@ mod test_path_variable {
 
         assert_eq!(vec!["\"/bin\""], path.iter().collect::<Vec<&str>>());
 
-        path.put_path("/new/path1/bin");
+        path.put_path("/new/path1/space bin");
         path.put_path("/new/path2/bin");
-        assert_eq!("/new/path2/bin:/new/path1/bin:\"/bin\"", path.serialize());
+        assert_eq!(
+            "'/new/path2/bin':'/new/path1/space bin':\"/bin\"",
+            path.serialize()
+        );
 
         // Don't support too tricky values
         let path_value =
             "\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"";
         let mut path = PathVariable::parse(path_value);
         path.put_path("/usr/local/bin");
-        assert_ne!("/usr/local/bin:\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"", path.serialize());
+        assert_ne!("'/usr/local/bin':\"/mnt/c/Program Files\"/foo:/usr/bin:/sbin:/bin:/some/path/include/quote\\\"", path.serialize());
     }
 }
 
@@ -808,7 +832,7 @@ mod test_env_file {
     }
 
     #[test]
-    fn test_put_and_save() {
+    fn test_put_env_and_save() {
         let mut tmp = NamedTempFile::new().unwrap();
         let cont = "\
             # This is a comment line
@@ -844,6 +868,116 @@ mod test_env_file {
 			BAZ=baz=baz\n\
 			FOO='foo3'\n\
 			NEW1='NEW1'\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_put_path() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let cont = "\
+            # This is a comment line\n\
+            PATH=\"/sbin:/bin\"\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        write!(&mut tmp, "{}", cont).unwrap();
+        let mut env = EnvFile::open(tmp.path()).unwrap();
+
+        env.put_path("/to/path1".to_owned());
+        env.put_path("/to/path2".to_owned());
+
+        assert_eq!(
+            Some("\"/to/path2:/to/path1:/sbin:/bin\""),
+            env.get_env("PATH")
+        );
+
+        env.write().unwrap();
+        let expected = "\
+            # This is a comment line\n\
+            PATH=\"/to/path2:/to/path1:/sbin:/bin\"\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_put_path_no_quote() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let cont = "\
+            # This is a comment line\n\
+            PATH=/sbin:/bin\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        write!(&mut tmp, "{}", cont).unwrap();
+        let mut env = EnvFile::open(tmp.path()).unwrap();
+
+        env.put_path("/to/path with space".to_owned());
+
+        env.write().unwrap();
+        let expected = "\
+            # This is a comment line\n\
+            PATH='/to/path with space':/sbin:/bin\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_put_path_strange() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let cont = "\
+            # This is a comment line\n\
+            PATH=/sbin:/bin:\\\n\
+            /other/bin  #continued PATH\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        write!(&mut tmp, "{}", cont).unwrap();
+        let mut env = EnvFile::open(tmp.path()).unwrap();
+
+        env.put_path("/to/path with space".to_owned());
+
+        env.write().unwrap();
+        let expected = "\
+            # This is a comment line\n\
+            PATH='/to/path with space':/sbin:/bin:\\\n\
+            /other/bin  #continued PATH\n\
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(new_cont, expected);
+    }
+
+    #[test]
+    fn test_put_path_to_no_path_file() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let cont = "\
+            # This is a comment line
+			FOO=foo\n\
+			BAR=bar\n\
+		";
+        write!(&mut tmp, "{}", cont).unwrap();
+        let mut env = EnvFile::open(tmp.path()).unwrap();
+
+        env.put_path("/to/path1".to_owned());
+        env.put_path("/to/path2".to_owned());
+
+        assert_eq!(Some("'/to/path2:/to/path1:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games'"), env.get_env("PATH"));
+
+        env.write().unwrap();
+        let expected = "\
+            # This is a comment line
+			FOO=foo\n\
+			BAR=bar\n\
+            PATH='/to/path2:/to/path1:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games'\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(new_cont, expected);
