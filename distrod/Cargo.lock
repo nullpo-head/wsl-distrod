@@ -742,6 +742,7 @@ dependencies = [
  "once_cell",
  "passfd",
  "procfs",
+ "regex",
  "reqwest",
  "scraper",
  "serde",

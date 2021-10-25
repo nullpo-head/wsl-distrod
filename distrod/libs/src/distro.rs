@@ -16,7 +16,7 @@ pub use crate::multifork::Waiter;
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 use crate::systemdunit::{get_existing_systemd_unit, SystemdUnitDisabler, SystemdUnitOverride};
-use crate::wsl_interop::{collect_wsl_env_vars, collect_wsl_paths};
+use crate::wsl_interop::collect_wsl_env_vars;
 use serde::{Deserialize, Serialize};
 
 const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
@@ -40,11 +40,9 @@ impl DistroLauncher {
             session_paths: HashSet::new(),
             container_launcher: ContainerLauncher::new(),
         };
-        distro_launcher
-            .with_wsl_envs()
-            .with_context(|| "failed to set up WSL env vars")?;
+        with_wsl_envs(&mut distro_launcher).with_context(|| "failed to set up WSL env vars")?;
         distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
-        mount_distrod_run_files(&mut distro_launcher.container_launcher)
+        mount_distrod_run_files(&mut distro_launcher)
             .with_context(|| "Failed to mount /run files.")?;
         Ok(distro_launcher)
     }
@@ -96,14 +94,43 @@ impl DistroLauncher {
         self
     }
 
+    pub fn with_init_arg<O: AsRef<OsStr>>(&mut self, arg: O) -> &mut Self {
+        self.container_launcher.with_init_arg(arg);
+        self
+    }
+
+    pub fn with_init_env<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.container_launcher.with_init_env(key, value);
+        self
+    }
+
+    pub fn with_mount(
+        &mut self,
+        source: Option<HostPath>,
+        target: ContainerPath,
+        fstype: Option<OsString>,
+        flags: nix::mount::MsFlags,
+        data: Option<OsString>,
+        is_file: bool,
+    ) -> &mut Self {
+        self.container_launcher
+            .with_mount(source, target, fstype, flags, data, is_file);
+        self
+    }
+
     pub fn launch(mut self) -> Result<Distro> {
         let rootfs = self
             .rootfs
-            .ok_or_else(|| anyhow!("rootfs is not initialized."))?;
+            .as_ref()
+            .ok_or_else(|| anyhow!("rootfs is not initialized."))?
+            .clone();
 
         if rootfs != Path::new("/") {
-            mount_wsl_mountpoints(&mut self.container_launcher)
-                .with_context(|| "Failed to mount WSL mountpoints.")?;
+            mount_wsl_mountpoints(&mut self).with_context(|| "Failed to mount WSL mountpoints.")?;
         }
 
         write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
@@ -129,26 +156,60 @@ impl DistroLauncher {
         let distro = Distro { container };
         Ok(distro)
     }
+}
 
-    fn with_wsl_envs(&mut self) -> Result<&mut Self> {
-        let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
-        for (key, value) in &wsl_envs {
-            self.with_system_env(
-                key.to_string_lossy().to_string(),
-                value.to_string_lossy().to_string(),
-            );
-            self.container_launcher
-                .with_init_arg(&env_to_systemd_setenv_arg(key, value));
+fn with_wsl_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
+    let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
+    for (key, value) in &wsl_envs {
+        if !sanity_check_wsl_env(key, value) {
+            log::warn!("sanity check of {:?} failed.", &key);
+            // stop handling this and further envs
+            break;
         }
-        let wsl_paths = collect_wsl_paths().with_context(|| "Failed to collect WSL paths.")?;
-        for path in wsl_paths {
-            self.with_session_path(path);
-        }
-        Ok(self)
+        distro_launcher.with_system_env(
+            key.to_string_lossy().to_string(),
+            value.to_string_lossy().to_string(),
+        );
+        distro_launcher
+            .container_launcher
+            .with_init_arg(&env_to_systemd_setenv_arg(key, value));
+    }
+    Ok(())
+}
+
+/// Make sure that the values of WSL_INTEROP, WSLENV, and WSL_DISTRO_NAME are harmless values that can be
+/// written to /etc/environment and passed to Systemd service processes. These values may be polluted
+/// because distrod-exec can be launched by any user.
+fn sanity_check_wsl_env(key: &OsStr, value: &OsStr) -> bool {
+    if key == OsStr::new("WSL_INTEROP") {
+        sanity_check_wsl_interop(value)
+    } else {
+        sanity_check_general_wsl_envs(value)
     }
 }
 
-fn mount_distrod_run_files(container_launcher: &mut ContainerLauncher) -> Result<()> {
+fn sanity_check_wsl_interop(value: &OsStr) -> bool {
+    let inner = || -> Result<bool> {
+        let safe_path = regex::Regex::new("^/run/WSL/[0-9]+_interop$")?;
+        let str = value
+            .to_str()
+            .ok_or_else(|| anyhow!("non-UTF8 WSL_INTEROP value."))?;
+        Ok(safe_path.is_match(str))
+    };
+    inner().unwrap_or(false)
+}
+
+fn sanity_check_general_wsl_envs(value: &OsStr) -> bool {
+    // sanity check for WSLENV and WSL_INTEROP
+    let inner = || -> Result<bool> {
+        let harmless_pattern = regex::Regex::new("^[a-zA-Z0-9_\\-./:]*$")?;
+        let str = value.to_str().ok_or_else(|| anyhow!("non-UTF8 value."))?;
+        Ok(harmless_pattern.is_match(str))
+    };
+    inner().unwrap_or(false)
+}
+
+fn mount_distrod_run_files(distro_launcher: &mut DistroLauncher) -> Result<()> {
     for path in glob::glob(&format!("{}/**/*", distrod_config::get_distrod_run_dir()))
         .with_context(|| "glob failed.")?
     {
@@ -169,7 +230,7 @@ fn mount_distrod_run_files(container_launcher: &mut ContainerLauncher) -> Result
                     })?,
             ),
         )?;
-        container_launcher.with_mount(
+        distro_launcher.with_mount(
             Some(HostPath::new(path)?),
             dest_mount_path,
             None,
@@ -181,7 +242,7 @@ fn mount_distrod_run_files(container_launcher: &mut ContainerLauncher) -> Result
     Ok(())
 }
 
-fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<()> {
+fn mount_wsl_mountpoints(distro_launcher: &mut DistroLauncher) -> Result<()> {
     let binds = vec![
         ("/init", true),
         ("/sys", false),
@@ -197,7 +258,7 @@ fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<(
             log::warn!("WSL path {:?} does not exist.", bind_file);
             continue;
         }
-        container_launcher.with_mount(
+        distro_launcher.with_mount(
             Some(HostPath::new(bind_file)?),
             ContainerPath::new(bind_file)?,
             None,
@@ -218,7 +279,7 @@ fn mount_wsl_mountpoints(container_launcher: &mut ContainerLauncher) -> Result<(
             // /init is also mounted by 9p, but we have already mounted it.
             continue;
         }
-        container_launcher.with_mount(
+        distro_launcher.with_mount(
             Some(HostPath::new(path)?),
             ContainerPath::new(path)?,
             None,
@@ -625,4 +686,42 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
         );
     }
     Ok(Some(json))
+}
+
+#[cfg(test)]
+mod test_sanity_check {
+    use super::*;
+
+    #[test]
+    fn test_sanity_check_wsl_interop() {
+        assert!(sanity_check_wsl_interop(&OsString::from(
+            "/run/WSL/12_interop"
+        )));
+        assert!(!sanity_check_wsl_interop(&OsString::from("/etc/passwd")));
+        assert!(!sanity_check_wsl_interop(&OsString::from(
+            "/run/WSL/some_new_socket"
+        )));
+        assert!(!sanity_check_wsl_interop(&OsString::from(
+            "/run/WSL/12_interop_tail"
+        )));
+        assert!(!sanity_check_wsl_interop(&OsString::from(
+            "/run/WSL/12_interop\ntest"
+        )));
+    }
+
+    #[test]
+    fn test_sanity_check_wsl_general_env() {
+        assert!(sanity_check_general_wsl_envs(&OsString::from(
+            "OneDrive/p:SOME_VAR:PATH/p"
+        )));
+        assert!(sanity_check_general_wsl_envs(&OsString::from(
+            "Ubuntu-20.04"
+        )));
+        assert!(!sanity_check_general_wsl_envs(&OsString::from(
+            "OneDrive/p:SOME_VAR:PATH/p\nHOME=/etc"
+        )));
+        assert!(!sanity_check_general_wsl_envs(&OsString::from(
+            "Ubuntu-20.04\ntest"
+        )));
+    }
 }
