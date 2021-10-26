@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use tempfile::NamedTempFile;
 
-use crate::template::Template;
+use libs::template::Template;
 use libs::wsl_interop;
 
 pub fn enable_autostart_on_windows_boot(distro_name: &str) -> Result<()> {

@@ -21,43 +21,6 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 
-#[derive(Debug, Clone)]
-pub struct ProfileDotDScript {
-    script_name: String,
-    dot_profile_dir_path: PathBuf,
-    env_shell_script: EnvShellScript,
-}
-
-impl ProfileDotDScript {
-    pub fn open<P: AsRef<Path>>(script_name: String, rootfs_path: P) -> Option<Self> {
-        let dot_profile_dir_path = rootfs_path.as_ref().join("etc/profile.d");
-        if !dot_profile_dir_path.exists() {
-            return None;
-        }
-        Some(ProfileDotDScript {
-            script_name,
-            dot_profile_dir_path,
-            env_shell_script: EnvShellScript::new(),
-        })
-    }
-
-    pub fn put_env(&mut self, name: String, value: String) {
-        self.env_shell_script.put_env(name, value);
-    }
-
-    pub fn put_path(&mut self, path: String) {
-        self.env_shell_script.put_path(path);
-    }
-
-    pub fn write(&self) -> Result<()> {
-        let script_path = self.dot_profile_dir_path.join(&self.script_name);
-        self.env_shell_script
-            .write(&script_path)
-            .with_context(|| format!("Failed to write envsh script to {:?}", &script_path))?;
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct EnvShellScript {
     envs: HashMap<String, String>,
@@ -77,14 +40,14 @@ impl EnvShellScript {
         self.paths.insert(path);
     }
 
-    pub fn write(&self, path: &Path) -> Result<()> {
+    pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let mut file = BufWriter::new(
             std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .mode(0o755)
-                .open(path)
-                .with_context(|| format!("Failed to create {:?}.", path))?,
+                .open(path.as_ref())
+                .with_context(|| format!("Failed to create {:?}.", path.as_ref()))?,
         );
         let script = self.gen_shell_script();
         file.write_all(script.as_bytes())?;

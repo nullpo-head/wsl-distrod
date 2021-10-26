@@ -10,16 +10,16 @@ use std::process::Command;
 
 use crate::container::{Container, ContainerLauncher, ContainerPath, HostPath};
 use crate::distrod_config::{self, DistrodConfig};
-use crate::envfile::{EnvFile, ProfileDotDScript};
+use crate::envfile::{EnvFile, EnvShellScript};
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
-use crate::passwd::Credential;
+use crate::passwd::{get_real_credential, Credential, PasswdFile};
 use crate::procfile::ProcFile;
 use crate::systemdunit::{get_existing_systemd_unit, SystemdUnitDisabler, SystemdUnitOverride};
-use crate::wsl_interop::collect_wsl_env_vars;
+use crate::template::Template;
+use crate::wsl_interop::{collect_wsl_env_vars, collect_wsl_paths};
 use serde::{Deserialize, Serialize};
 
-const DISTRO_RUN_INFO_PATH: &str = "/var/run/distrod.json";
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,6 @@ pub struct DistroLauncher {
     rootfs: Option<PathBuf>,
     system_envs: HashMap<String, String>,
     system_paths: HashSet<String>,
-    session_paths: HashSet<String>,
     container_launcher: ContainerLauncher,
 }
 
@@ -37,13 +36,15 @@ impl DistroLauncher {
             rootfs: None,
             system_envs: HashMap::new(),
             system_paths: HashSet::new(),
-            session_paths: HashSet::new(),
             container_launcher: ContainerLauncher::new(),
         };
-        with_wsl_envs(&mut distro_launcher).with_context(|| "failed to set up WSL env vars")?;
-        distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
-        mount_distrod_run_files(&mut distro_launcher)
+        set_wsl_interop_envs_in_system_envs(&mut distro_launcher)
+            .with_context(|| "failed to set up WSL interop env vars")?;
+        mount_wsl_envs_init_script(&mut distro_launcher)
+            .with_context(|| "failed to mount WSL environment variables init script.")?;
+        mount_slash_run_static_files(&mut distro_launcher)
             .with_context(|| "Failed to mount /run files.")?;
+        distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
         Ok(distro_launcher)
     }
 
@@ -89,11 +90,6 @@ impl DistroLauncher {
         self
     }
 
-    pub fn with_session_path(&mut self, path: String) -> &mut Self {
-        self.session_paths.insert(path);
-        self
-    }
-
     pub fn with_init_arg<O: AsRef<OsStr>>(&mut self, arg: O) -> &mut Self {
         self.container_launcher.with_init_arg(arg);
         self
@@ -135,8 +131,6 @@ impl DistroLauncher {
 
         write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
             .with_context(|| "Failed to write system env file.")?;
-        write_session_env_files(HostPath::new(&rootfs)?, self.session_paths)
-            .with_context(|| "Failed to write session env file.")?;
 
         self.container_launcher
             .with_init_env("container", "distrod") // See https://systemd.io/CONTAINER_INTERFACE/
@@ -158,9 +152,13 @@ impl DistroLauncher {
     }
 }
 
-fn with_wsl_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
+fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
     let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
+    let envs_to_set = [OsStr::new("WSL_INTEROP"), OsStr::new("WSLENV")];
     for (key, value) in &wsl_envs {
+        if !envs_to_set.contains(&key.as_os_str()) {
+            continue;
+        }
         if !sanity_check_wsl_env(key, value) {
             log::warn!("sanity check of {:?} failed.", &key);
             // stop handling this and further envs
@@ -209,7 +207,49 @@ fn sanity_check_general_wsl_envs(value: &OsStr) -> bool {
     inner().unwrap_or(false)
 }
 
-fn mount_distrod_run_files(distro_launcher: &mut DistroLauncher) -> Result<()> {
+fn env_to_systemd_setenv_arg<K, V>(key: K, value: V) -> OsString
+where
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let mut arg = OsString::from("systemd.setenv=");
+    arg.push(key.as_ref());
+    arg.push("=");
+    arg.push(value.as_ref());
+    arg
+}
+
+fn mount_wsl_envs_init_script(distro_launcher: &mut DistroLauncher) -> Result<()> {
+    let mut env_shell_script = EnvShellScript::new();
+    for (key, value) in collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")? {
+        env_shell_script.put_env(
+            key.to_string_lossy().to_string(),
+            value.to_string_lossy().to_string(),
+        );
+    }
+    for path in collect_wsl_paths().with_context(|| "Failed to collect WSL paths.")? {
+        env_shell_script.put_path(path);
+    }
+
+    let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
+    let host_sh_path = get_wsl_envs_init_sh_host_path(&real_user)?;
+    env_shell_script
+        .write(&host_sh_path)
+        .with_context(|| "Failed to write the EnvShellScript.")?;
+    let container_sh_path = get_wsl_envs_init_sh_container_path(&real_user);
+
+    distro_launcher.with_mount(
+        Some(host_sh_path),
+        container_sh_path,
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+        true,
+    );
+    Ok(())
+}
+
+fn mount_slash_run_static_files(distro_launcher: &mut DistroLauncher) -> Result<()> {
     for path in glob::glob(&format!("{}/**/*", distrod_config::get_distrod_run_dir()))
         .with_context(|| "glob failed.")?
     {
@@ -291,18 +331,6 @@ fn mount_wsl_mountpoints(distro_launcher: &mut DistroLauncher) -> Result<()> {
     Ok(())
 }
 
-fn env_to_systemd_setenv_arg<K, V>(key: K, value: V) -> OsString
-where
-    K: AsRef<OsStr>,
-    V: AsRef<OsStr>,
-{
-    let mut arg = OsString::from("systemd.setenv=");
-    arg.push(key.as_ref());
-    arg.push("=");
-    arg.push(value.as_ref());
-    arg
-}
-
 fn write_system_env_files(
     rootfs_path: HostPath,
     envs: HashMap<String, String>,
@@ -320,20 +348,6 @@ fn write_system_env_files(
     env_file
         .write()
         .with_context(|| format!("Failed to write system env file on {:?}", env_file_path))?;
-    Ok(())
-}
-
-fn write_session_env_files(rootfs_path: HostPath, paths: HashSet<String>) -> Result<()> {
-    let mut profile_dot_d = match ProfileDotDScript::open("distrod.sh".to_owned(), &rootfs_path) {
-        Some(p) => p,
-        None => return Ok(()),
-    };
-    for path in paths {
-        profile_dot_d.put_path(path);
-    }
-    profile_dot_d
-        .write()
-        .with_context(|| format!("Failed to write profile.d script under {:?}", &rootfs_path))?;
     Ok(())
 }
 
@@ -410,6 +424,8 @@ pub fn do_distro_independent_initialization(
     disable_incompatible_systemd_network_configuration(rootfs, overwrites_potential_userfiles)?;
     disable_incompatible_systemd_services(rootfs);
     disable_incompatible_systemd_service_options(rootfs);
+    append_wsl_envs_init_script_to_home_profile(rootfs, overwrites_potential_userfiles)
+        .with_context(|| "Failed to initialize ~/.profile")?;
     Ok(())
 }
 
@@ -518,6 +534,83 @@ fn disable_incompatible_systemd_service_options(rootfs: &Path) {
             log::warn!("{:?}", e);
         }
     }
+}
+
+fn append_wsl_envs_init_script_to_home_profile(
+    rootfs: &Path,
+    overwrites_potential_userfiles: bool,
+) -> Result<()> {
+    if !overwrites_potential_userfiles {
+        return Ok(());
+    }
+    let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
+    let bytes = include_bytes!("../resources/wsl_envs_load_profile.sh");
+    let mut load_script = Template::new(String::from_utf8_lossy(bytes).into_owned());
+    load_script.assign(
+        "WSL_ENV_INIT_SH_PATH",
+        &get_wsl_envs_init_sh_container_path(&real_user).to_string_lossy(),
+    );
+    if let Some(mut user_profile) = open_user_profile(rootfs, &real_user)? {
+        user_profile
+            .write_all(load_script.render().as_bytes())
+            .with_context(|| format!("Failed to write to ~/.profile for {}", &real_user.uid))?;
+    } else {
+        log::debug!("No ~/.profile is found for {}", &real_user.uid);
+    }
+    Ok(())
+}
+
+fn open_user_profile(rootfs: &Path, user: &Credential) -> Result<Option<impl Write>> {
+    let user_profile_path = get_user_profile_path(rootfs, user)
+        .with_context(|| "Failed to get the current user's .profile path.")?;
+    if user_profile_path.is_none() {
+        return Ok(None);
+    }
+    let user_profile_path = user_profile_path
+        .unwrap()
+        .to_host_path(&HostPath::new(rootfs)?);
+
+    let should_change_ownership = !user_profile_path.exists();
+    let user_profile = BufWriter::new(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&user_profile_path)
+            .with_context(|| format!("Failed to open {:?}", &user_profile_path))?,
+    );
+    if should_change_ownership {
+        nix::unistd::chown(user_profile_path.as_path(), Some(user.uid), Some(user.gid))
+            .with_context(|| format!("Failed to chown {:?}", &user_profile_path))?;
+    }
+    Ok(Some(user_profile))
+}
+
+fn get_user_profile_path(rootfs: &Path, user: &Credential) -> Result<Option<ContainerPath>> {
+    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(&HostPath::new(rootfs)?);
+    let mut passwd = PasswdFile::open(&passwd_path)
+        .with_context(|| format!("Failed to open {:?}", &passwd_path))?;
+    let home_path = passwd
+        .get_ent_by_uid(user.uid.as_raw())
+        .with_context(|| format!("Failed to get entry for {}", user.uid))?;
+    if home_path.is_none() {
+        return Ok(None);
+    }
+    Ok(ContainerPath::new(Path::new(&home_path.unwrap().dir).join(".profile")).ok())
+}
+
+fn get_wsl_envs_init_sh_container_path(user: &Credential) -> ContainerPath {
+    ContainerPath::new("/run".to_owned() + &get_wsl_envs_init_sh_file_name(user))
+        .expect("[BUG] wsl_envs_init_sh container path should be absolute")
+}
+
+fn get_wsl_envs_init_sh_host_path(user: &Credential) -> Result<HostPath> {
+    get_distrod_runtime_files_dir_path().map(|mut path| {
+        path.push(&get_wsl_envs_init_sh_file_name(user));
+        path
+    })
+}
+
+fn get_wsl_envs_init_sh_file_name(user: &Credential) -> String {
+    format!("distrod_wsl_env-uid{}", &user.uid.to_string())
 }
 
 fn do_distro_specific_initialization(
@@ -646,7 +739,7 @@ fn disable_centos_network_initialization(rootfs: &HostPath) -> Result<()> {
 
 fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
     if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
-        fs::remove_file(&DISTRO_RUN_INFO_PATH)
+        fs::remove_file(&get_distro_run_info_path()?)
             .with_context(|| "Failed to remove the existing run info file.")?;
     }
     let mut file = BufWriter::new(
@@ -672,7 +765,7 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
     if write {
         json.write(true);
     }
-    let json = json.open(DISTRO_RUN_INFO_PATH);
+    let json = json.open(get_distro_run_info_path()?);
     if let Err(ref error) = json {
         if error.raw_os_error() == Some(nix::errno::Errno::ENOENT as i32) {
             return Ok(None);
@@ -686,6 +779,22 @@ fn get_distro_run_info_file(create: bool, write: bool) -> Result<Option<File>> {
         );
     }
     Ok(Some(json))
+}
+
+fn get_distro_run_info_path() -> Result<HostPath> {
+    get_distrod_runtime_files_dir_path().map(|mut path| {
+        path.push("distrod_run_info.json");
+        path
+    })
+}
+
+fn get_distrod_runtime_files_dir_path() -> Result<HostPath> {
+    let path = "/run/distrod";
+    if !Path::new(&path).exists() {
+        fs::create_dir(&path)
+            .with_context(|| format!("Failed to create {:?} directory.", &path))?;
+    }
+    HostPath::new(path)
 }
 
 #[cfg(test)]

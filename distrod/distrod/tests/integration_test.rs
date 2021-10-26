@@ -326,6 +326,18 @@ fn test_wslg_socket_is_available() {
     assert!(output.ends_with("-> /mnt/wslg/.X11-unix\n"));
 }
 
+#[test]
+fn test_home_profile_initializes_additional_wsl_envs() {
+    let mut echo_distro_name = DISTROD_SETUP.new_command();
+    echo_distro_name.env_clear();
+    echo_distro_name.env("HOME", "/root");
+    echo_distro_name.env("WSL_DISTRO_NAME", "");
+    echo_distro_name.args(&["exec", "--", "bash", "-l", "-c", "echo $WSL_DISTRO_NAME"]);
+    let output = echo_distro_name.output().unwrap();
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert_eq!("DUMMY_DISTRO", output.trim());
+}
+
 struct DistrodSetup {
     name: String,
     bin_path: PathBuf,
@@ -345,6 +357,8 @@ impl DistrodSetup {
         let image = setup_distro_image(&self.name);
         let mut distrod = self.new_command();
         distrod.args(&[
+            "-l",
+            "trace",
             "create",
             "--image-path",
             image.to_str().unwrap(),

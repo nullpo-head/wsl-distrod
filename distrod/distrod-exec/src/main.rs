@@ -8,7 +8,7 @@ use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use structopt::StructOpt;
 
-use libs::passwd::Credential;
+use libs::passwd::get_real_credential;
 
 /// Distrod-exec is a small helper command to allow a non-root user to run programs under the systemd container.
 /// It implements the subset features of distrod's exec subcommand, but has the setuid bit set.
@@ -108,17 +108,6 @@ where
         return exec_command(command, arg0.as_ref(), args);
     }
     Ok(())
-}
-
-fn get_real_credential() -> Result<Credential> {
-    let egid = nix::unistd::getegid(); // root
-    let groups = nix::unistd::getgroups().with_context(|| "Failed to get grups")?;
-    let groups = groups.into_iter().filter(|group| *group != egid).collect();
-    Ok(Credential::new(
-        nix::unistd::getuid(),
-        nix::unistd::getgid(),
-        groups,
-    ))
 }
 
 fn launch_distro() -> Result<Distro> {

@@ -1,8 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use libs::cli_ui::{build_progress_bar, choose_from_list, init_logger, prompt_path, LogLevel};
+use libs::container::{ContainerPath, HostPath};
 use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
 use libs::multifork::set_noninheritable_sig_ign;
+use nix::unistd::{Gid, Uid};
 use std::ffi::{CString, OsString};
 use std::fs::File;
 use std::io::{stdin, Cursor, Read};
@@ -18,13 +20,11 @@ use libs::distro_image::{
     DistroImageFile,
 };
 use libs::lxd_image::LxdDistroImageList;
-use libs::passwd::IdCredential;
-use libs::passwd::{self, Credential};
+use libs::passwd::{self, get_credential_from_passwd_file, Credential};
 use libs::wsl_interop;
 
 mod autostart;
 mod shell_hook;
-mod template;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
@@ -342,8 +342,24 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     let distro = distro.unwrap();
 
     let host_root_path = OsString::from("/");
-    let rootfs_path = opts.rootfs.as_ref().unwrap_or(&host_root_path);
-    let cred = get_credential(opts.user.as_ref(), opts.uid, rootfs_path)?;
+    let rootfs_path = HostPath::new(opts.rootfs.as_ref().unwrap_or(&host_root_path))?;
+    let cred = opts
+        .uid
+        .map(|uid| {
+            Ok(get_credential_from_passwd_file(
+                opts.user.as_ref(),
+                Some(uid),
+                &ContainerPath::new("/etc/passwd")?.to_host_path(&rootfs_path),
+            )
+            .with_context(|| format!("Failed to open passwd file. {:?}", &rootfs_path))?
+            .unwrap_or(Credential {
+                uid: Uid::from_raw(uid),
+                gid: Gid::from_raw(uid),
+                groups: vec![Gid::from_raw(uid)],
+            }))
+        })
+        .map_or(Ok(None), |v: Result<_>| v.map(Some))
+        .with_context(|| "Failed to get credentail.")?;
 
     log::debug!("Executing a command in the distro.");
     set_noninheritable_sig_ign();
@@ -359,26 +375,6 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     }
     let status = waiter.wait();
     std::process::exit(status as i32)
-}
-
-fn get_credential<P: AsRef<Path>>(
-    name: Option<&String>,
-    uid: Option<u32>,
-    rootfs_path: P,
-) -> Result<Option<Credential>> {
-    let mut passwd_file = passwd::PasswdFile::open(&rootfs_path.as_ref().join("etc/passwd"))
-        .with_context(|| {
-            format!(
-                "Failed to open the passwd file. '{:?}'",
-                rootfs_path.as_ref()
-            )
-        })?;
-    let cred = match (name, uid) {
-        (Some(name), _) => Credential::from_user(IdCredential::Name(name), &mut passwd_file)?,
-        (_, Some(uid)) => Credential::from_user(IdCredential::Uid(uid), &mut passwd_file)?,
-        _ => return Ok(None),
-    };
-    Ok(Some(cred))
 }
 
 fn stop_distro(opts: StopOpts) -> Result<()> {

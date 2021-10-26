@@ -67,7 +67,8 @@ main () {
     set +e
     case "$COMMAND" in
     run)
-        sudo -E -- ip netns exec "$NS" sudo -E -u "$(whoami)" -- "$CARGO" test --verbose -p distrod
+        # shellcheck disable=SC2086
+        sudo -E -- ip netns exec "$NS" sudo -E -u "$(whoami)" -- "$CARGO" test --verbose -p distrod ${TEST_TARGETS}
         EXIT_CODE=$?
         ;;
     enter)
@@ -110,13 +111,12 @@ mount_overlay() {
 prepare_for_nested_distrod() {
     # Enter a new mount namespace for testing.
     # To make distrod think it's not inside another distrod,
-    # 1. Delete /var/run/distrod.json without affecting the running distrod by 
+    # 1. Delete /run/distrod.json without affecting the running distrod by 
     #    mounting overlay
     # 2. Unmount directories under /mnt/distrod_root, which is a condition 
     #    distrod checks
-    mount_overlay /var/run
-    sudo rm -f /var/run/distrod.json
-    sudo rm -f /var/run/distrod-cmdline
+    mount_overlay /run
+    sudo rm -f /run/distrod
     sudo umount /mnt/distrod_root/proc || true  # may not exist
 }
 

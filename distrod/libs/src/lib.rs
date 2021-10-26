@@ -24,3 +24,6 @@ pub mod procfile;
 pub mod systemdunit;
 #[cfg(target_os = "linux")]
 pub mod wsl_interop;
+
+#[cfg(target_os = "linux")]
+pub mod template;

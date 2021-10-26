@@ -17,6 +17,36 @@ pub enum IdCredential<'a> {
     Name(&'a str),
 }
 
+pub fn get_real_credential() -> Result<Credential> {
+    let egid = nix::unistd::getegid(); // root
+    let groups = nix::unistd::getgroups().with_context(|| "Failed to get grups")?;
+    let groups = groups.into_iter().filter(|group| *group != egid).collect();
+    Ok(Credential::new(
+        nix::unistd::getuid(),
+        nix::unistd::getgid(),
+        groups,
+    ))
+}
+
+pub fn get_credential_from_passwd_file<P: AsRef<Path>>(
+    name: Option<&String>,
+    uid: Option<u32>,
+    passwd_file_path: P,
+) -> Result<Option<Credential>> {
+    let mut passwd_file = PasswdFile::open(passwd_file_path.as_ref()).with_context(|| {
+        format!(
+            "Failed to open the passwd file. '{:?}'",
+            passwd_file_path.as_ref()
+        )
+    })?;
+    let cred = match (name, uid) {
+        (Some(name), _) => Credential::from_user(IdCredential::Name(name), &mut passwd_file)?,
+        (_, Some(uid)) => Credential::from_user(IdCredential::Uid(uid), &mut passwd_file)?,
+        _ => return Ok(None),
+    };
+    Ok(Some(cred))
+}
+
 impl Credential {
     pub fn new(uid: Uid, gid: Gid, groups: Vec<Gid>) -> Credential {
         Credential { uid, gid, groups }
