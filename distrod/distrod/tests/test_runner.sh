@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -e
+set -eu
 
 ###
 # Because Distrod doesn't implement nested distrod instance running, 
@@ -17,16 +17,17 @@ EOS
 }
 
 main () {
-    if [ "$1" != run ] && [ "$1" != enter ]; then
+    if [ "${1:-}" != run ] && [ "${1:-}" != enter ]; then
         usage
         exit 1
     fi
     COMMAND="$1"
 
-    if [ "$2" != "--unshared" ]; then
+    if [ "${2:-}" != "--unshared" ]; then
+        setup_workdir
         sudo -E unshare -mfp sudo -E -u "$(whoami)" "$0" "$COMMAND" --unshared "$(which cargo)"
         EXIT_CODE=$?
-        teardown_overlayfs_workdir
+        teardown_workdir
         exit $EXIT_CODE
     else
         sudo mount -t proc none /proc  # Make it see the new PIDs
@@ -36,7 +37,7 @@ main () {
     # From here, this script runs in the new mount and PID namespace
     ##
 
-    if [ -z "$3" ]; then
+    if [ -z "${3:-}" ]; then
         echo "Error: Internal usage: $0 $COMMAND --unshared path_to_cargo [options...]" >&2
         exit 1
     fi
@@ -46,7 +47,7 @@ main () {
     prepare_for_nested_distrod
     mount_opt_distrod
     set_pseudo_wsl_envs
-    NS="itestns"
+    NS="tst$(basename "${WORK_DIR}" | cut -c1-7)"
     remove_pseudo_wsl_netns "$NS"  # delete netns and interfaces if there is existing ones
     create_pseudo_wsl_netns "$NS"
     # Use 8.8.8.8 as the name server. Because the cargo runs in the new netns,
@@ -68,7 +69,7 @@ main () {
     case "$COMMAND" in
     run)
         # shellcheck disable=SC2086
-        sudo -E -- ip netns exec "$NS" sudo -E -u "$(whoami)" -- "$CARGO" test --verbose -p distrod ${TEST_TARGETS}
+        sudo -E -- ip netns exec "$NS" sudo -E -u "$(whoami)" -- "$CARGO" test --verbose -p distrod ${TEST_TARGETS:-}
         EXIT_CODE=$?
         ;;
     enter)
@@ -88,15 +89,21 @@ main () {
     exit $EXIT_CODE
 }
 
-OVERLAY_TMP_DIR=/tmp/distrod_test
-
-setup_overlayfs_workdir() {
-    sudo rm -rf "${OVERLAY_TMP_DIR}"
-    mkdir -p "${OVERLAY_TMP_DIR}"
+setup_workdir() {
+    export WORK_DIR="${WODK_DIR:-$(mktemp -d)}"
 }
 
-teardown_overlayfs_workdir() {
+teardown_workdir() {
+    if [ -z "${WORK_DIR:-}" ]; then
+        return 1
+    fi
+    sudo rm -rf "${WORK_DIR}"
+}
+
+setup_overlayfs_workdir() {
+    OVERLAY_TMP_DIR="${WORK_DIR}/overlay"
     sudo rm -rf "${OVERLAY_TMP_DIR}"
+    mkdir -p "${OVERLAY_TMP_DIR}"
 }
 
 mount_overlay() {
@@ -111,7 +118,7 @@ mount_overlay() {
 prepare_for_nested_distrod() {
     # Enter a new mount namespace for testing.
     # To make distrod think it's not inside another distrod,
-    # 1. Delete /run/distrod.json without affecting the running distrod by 
+    # 1. Delete /run/distrod without affecting the running distrod by 
     #    mounting overlay
     # 2. Unmount directories under /mnt/distrod_root, which is a condition 
     #    distrod checks
@@ -220,7 +227,7 @@ set_link_name_variables() {
 }
 
 set_name_server_to_public_dns() {
-    cat  > /tmp/resolv.conf <<EOF
+    cat  > "${WORK_DIR:-}/resolv.conf" <<EOF
 nameserver 8.8.8.8
 options single-request
 EOF
@@ -243,7 +250,7 @@ kill_distrod() {
 }
 
 remove_rootfs_dir() {
-    if [ "${KEEP_ROOTFS}" = 1 ]; then
+    if [ "${KEEP_ROOTFS:-0}" = 1 ]; then
         echo "Keeping the rootfs at $1" >&2
         return
     fi

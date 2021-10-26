@@ -22,12 +22,11 @@ enter-integration-test-env:
 	@echo Run 'cargo test -p distrod'.
 	cd distrod/distrod/tests; ./test_runner.sh enter
 
-ALL_DISTROS_IN_TESTING=ubuntu debian archlinux fedora centos almalinux rockylinux kali mint opensuse amazonlinux oracle gentoo
-integration-test-linux-all-distros:
-	cd distrod/distrod/tests; \
-    for distro in $(ALL_DISTROS_IN_TESTING); do \
-		 DISTRO_TO_TEST=$${distro} ./test_runner.sh run; \
-	done
+ALL_DISTROS_TO_TEST ?= ubuntu debian archlinux fedora centos almalinux rockylinux kali mint opensuse amazonlinux oracle gentoo
+integration-test-linux-all-distros: $(addprefix integration-test-linux-,$(ALL_DISTROS_TO_TEST))
+
+integration-test-linux-%:
+	cd distrod/distrod/tests; DISTRO_TO_TEST=$(subst integration-test-linux-,,$@) ./test_runner.sh run
 
 test-linux: lint unit-test-linux integration-test-linux
 
