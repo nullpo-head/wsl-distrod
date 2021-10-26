@@ -332,7 +332,13 @@ fn test_home_profile_initializes_additional_wsl_envs() {
     echo_distro_name.env_clear();
     echo_distro_name.env("HOME", "/root");
     echo_distro_name.env("WSL_DISTRO_NAME", "");
-    echo_distro_name.args(&["exec", "--", "bash", "-l", "-c", "echo $WSL_DISTRO_NAME"]);
+    echo_distro_name.args(&[
+        "exec",
+        "--",
+        "bash",
+        "-c",
+        ". $HOME/.profile; echo $WSL_DISTRO_NAME",
+    ]);
     let output = echo_distro_name.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
     assert_eq!("DUMMY_DISTRO", output.trim());
