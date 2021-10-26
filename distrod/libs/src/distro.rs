@@ -574,6 +574,7 @@ fn open_user_profile(rootfs: &Path, user: &Credential) -> Result<Option<impl Wri
     let user_profile = BufWriter::new(
         fs::OpenOptions::new()
             .append(true)
+            .create(true)
             .open(&user_profile_path)
             .with_context(|| format!("Failed to open {:?}", &user_profile_path))?,
     );
