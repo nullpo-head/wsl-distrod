@@ -342,6 +342,27 @@ fn test_home_profile_initializes_additional_wsl_envs() {
     let output = echo_distro_name.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
     assert_eq!("DUMMY_DISTRO", output.trim());
+
+    let mut create_user = DISTROD_SETUP.new_command();
+    create_user.args(&["exec", "--", "useradd", "-m", "test_user"]);
+    let child = create_user.status().unwrap();
+    assert!(child.success());
+    let mut cat_profile = DISTROD_SETUP.new_command();
+    cat_profile.env_clear();
+    cat_profile.env("HOME", "/home/test_user");
+    cat_profile.args(&[
+        "exec",
+        "--user",
+        "test_user",
+        "--",
+        "bash",
+        "-c",
+        "cat $HOME/.profile",
+    ]);
+    let output = cat_profile.output().unwrap();
+    let output = String::from_utf8_lossy(&output.stdout);
+    eprintln!("output: {}", output);
+    assert!(output.contains("distrod"));
 }
 
 struct DistrodSetup {

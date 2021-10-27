@@ -543,75 +543,105 @@ fn append_wsl_envs_init_script_to_home_profile(
     if !overwrites_potential_userfiles {
         return Ok(());
     }
-    let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
     let bytes = include_bytes!("../resources/wsl_envs_load_profile.sh");
     let mut load_script = Template::new(String::from_utf8_lossy(bytes).into_owned());
     load_script.assign(
         "WSL_ENV_INIT_SH_PATH",
-        &get_wsl_envs_init_sh_container_path(&real_user).to_string_lossy(),
+        &get_shell_string_of_wsl_envs_init_sh_path_for_current_user(),
     );
-    if let Some(mut user_profile) = open_user_profile(rootfs, &real_user)? {
-        user_profile
+    if let Some(mut skel_profile) = open_skel_profile(rootfs)? {
+        skel_profile
             .write_all(load_script.render().as_bytes())
-            .with_context(|| format!("Failed to write to ~/.profile for {}", &real_user.uid))?;
+            .with_context(|| "Failed to write to skel's .profile")?;
     } else {
-        log::debug!("No ~/.profile is found for {}", &real_user.uid);
+        log::debug!("The skel directory is not found");
+    }
+    // '/root' is already initialized and the change to the skel is not applied.
+    // So, append the script to /root/.profile, too.
+    if let Some(mut root_profile) = open_root_profile(rootfs)? {
+        root_profile
+            .write_all(load_script.render().as_bytes())
+            .with_context(|| "Failed to write to skel's .profile")?;
+    } else {
+        log::debug!("The home directory of root is not found");
     }
     Ok(())
 }
 
-fn open_user_profile(rootfs: &Path, user: &Credential) -> Result<Option<impl Write>> {
-    let user_profile_path = get_user_profile_path(rootfs, user)
-        .with_context(|| "Failed to get the current user's .profile path.")?;
-    if user_profile_path.is_none() {
+fn open_skel_profile(rootfs: &Path) -> Result<Option<impl Write>> {
+    let rootfs = HostPath::new(rootfs)?;
+    let mut skel_dir = ContainerPath::new("/etc/skel")?;
+    if !skel_dir.to_host_path(&rootfs).exists() {
         return Ok(None);
     }
-    let user_profile_path = user_profile_path
-        .unwrap()
-        .to_host_path(&HostPath::new(rootfs)?);
+    open_dot_profile_at(&rootfs, &mut skel_dir)
+}
 
-    let should_change_ownership = !user_profile_path.exists();
-    let user_profile = BufWriter::new(
+fn open_root_profile(rootfs: &Path) -> Result<Option<impl Write>> {
+    let rootfs = HostPath::new(rootfs)?;
+    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(&rootfs);
+    let mut passwd = PasswdFile::open(&passwd_path)
+        .with_context(|| format!("Failed to open {:?}", &passwd_path))?;
+    match passwd
+        .get_ent_by_uid(0)
+        .with_context(|| "Failed to get entry for root")?
+    {
+        Some(entry) => open_dot_profile_at(
+            &rootfs,
+            &mut ContainerPath::new(entry.dir).with_context(|| {
+                format!(
+                    "/etc/passwd has root's home directory as a relative path: {:?}",
+                    entry.dir
+                )
+            })?,
+        ),
+        None => Ok(None),
+    }
+}
+
+fn open_dot_profile_at(
+    rootfs: &HostPath,
+    profile_dir: &mut ContainerPath,
+) -> Result<Option<impl Write>> {
+    profile_dir.push(".profile");
+    let profile_path = profile_dir;
+    let profile_path = profile_path.to_host_path(rootfs);
+    let profile = BufWriter::new(
         fs::OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&user_profile_path)
-            .with_context(|| format!("Failed to open {:?}", &user_profile_path))?,
+            .open(&profile_path)
+            .with_context(|| format!("Failed to open {:?}", &profile_path))?,
     );
-    if should_change_ownership {
-        nix::unistd::chown(user_profile_path.as_path(), Some(user.uid), Some(user.gid))
-            .with_context(|| format!("Failed to chown {:?}", &user_profile_path))?;
-    }
-    Ok(Some(user_profile))
+    Ok(Some(profile))
 }
 
-fn get_user_profile_path(rootfs: &Path, user: &Credential) -> Result<Option<ContainerPath>> {
-    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(&HostPath::new(rootfs)?);
-    let mut passwd = PasswdFile::open(&passwd_path)
-        .with_context(|| format!("Failed to open {:?}", &passwd_path))?;
-    let home_path = passwd
-        .get_ent_by_uid(user.uid.as_raw())
-        .with_context(|| format!("Failed to get entry for {}", user.uid))?;
-    if home_path.is_none() {
-        return Ok(None);
-    }
-    Ok(ContainerPath::new(Path::new(&home_path.unwrap().dir).join(".profile")).ok())
+fn get_shell_string_of_wsl_envs_init_sh_path_for_current_user() -> String {
+    format!("/run/{}", &get_wsl_envs_init_sh_file_name("$(id -u)"))
 }
 
 fn get_wsl_envs_init_sh_container_path(user: &Credential) -> ContainerPath {
-    ContainerPath::new("/run".to_owned() + &get_wsl_envs_init_sh_file_name(user))
-        .expect("[BUG] wsl_envs_init_sh container path should be absolute")
+    ContainerPath::new("/run")
+        .map(|mut path| {
+            path.push(&get_wsl_envs_init_sh_file_name(
+                &user.uid.as_raw().to_string(),
+            ));
+            path
+        })
+        .expect("[BUG] the path given to ContainerPath::new should be absolute.")
 }
 
 fn get_wsl_envs_init_sh_host_path(user: &Credential) -> Result<HostPath> {
     get_distrod_runtime_files_dir_path().map(|mut path| {
-        path.push(&get_wsl_envs_init_sh_file_name(user));
+        path.push(&get_wsl_envs_init_sh_file_name(
+            &user.uid.as_raw().to_string(),
+        ));
         path
     })
 }
 
-fn get_wsl_envs_init_sh_file_name(user: &Credential) -> String {
-    format!("distrod_wsl_env-uid{}", &user.uid.to_string())
+fn get_wsl_envs_init_sh_file_name(uid: &str) -> String {
+    format!("distrod_wsl_env-uid{}", uid)
 }
 
 fn do_distro_specific_initialization(
