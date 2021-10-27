@@ -502,7 +502,7 @@ fn disable_incompatible_systemd_services(rootfs: &HostPath) {
     }
 }
 
-fn disable_incompatible_systemd_service_options(rootfs: &Path) {
+fn disable_incompatible_systemd_service_options(rootfs: &HostPath) {
     let options = &[("systemd-sysusers.service", "Service", "LoadCredential")];
 
     for (service, section, option_directive) in options {
@@ -537,7 +537,7 @@ fn disable_incompatible_systemd_service_options(rootfs: &Path) {
 }
 
 fn append_wsl_envs_init_script_to_home_profile(
-    rootfs: &Path,
+    rootfs: &HostPath,
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
     if !overwrites_potential_userfiles {
@@ -568,18 +568,16 @@ fn append_wsl_envs_init_script_to_home_profile(
     Ok(())
 }
 
-fn open_skel_profile(rootfs: &Path) -> Result<Option<impl Write>> {
-    let rootfs = HostPath::new(rootfs)?;
+fn open_skel_profile(rootfs: &HostPath) -> Result<Option<impl Write>> {
     let mut skel_dir = ContainerPath::new("/etc/skel")?;
-    if !skel_dir.to_host_path(&rootfs).exists() {
+    if !skel_dir.to_host_path(rootfs).exists() {
         return Ok(None);
     }
-    open_dot_profile_at(&rootfs, &mut skel_dir)
+    open_dot_profile_at(rootfs, &mut skel_dir)
 }
 
-fn open_root_profile(rootfs: &Path) -> Result<Option<impl Write>> {
-    let rootfs = HostPath::new(rootfs)?;
-    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(&rootfs);
+fn open_root_profile(rootfs: &HostPath) -> Result<Option<impl Write>> {
+    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(rootfs);
     let mut passwd = PasswdFile::open(&passwd_path)
         .with_context(|| format!("Failed to open {:?}", &passwd_path))?;
     match passwd
@@ -587,7 +585,7 @@ fn open_root_profile(rootfs: &Path) -> Result<Option<impl Write>> {
         .with_context(|| "Failed to get entry for root")?
     {
         Some(entry) => open_dot_profile_at(
-            &rootfs,
+            rootfs,
             &mut ContainerPath::new(entry.dir).with_context(|| {
                 format!(
                     "/etc/passwd has root's home directory as a relative path: {:?}",
