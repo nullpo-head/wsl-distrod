@@ -455,6 +455,20 @@ fn disable_incompatible_systemd_network_configuration(
         let path = path?;
         fs::remove_file(&path).with_context(|| format!("Failed to remove '{:?}'.", &path))?;
     }
+    // Remove network-scripts configurations
+    let path_to_network =
+        ContainerPath::new("/etc/sysconfig/network-scripts/ifcfg-eth0")?.to_host_path(rootfs);
+    if path_to_network.exists() {
+        let backup_name =
+            ContainerPath::new("/etc/sysconfig/network-scripts/disabled-by-distrod.ifcfg-eth0")?
+                .to_host_path(rootfs);
+        fs::rename(&path_to_network, &backup_name).with_context(|| {
+            format!(
+                "Failed to move {:?} to {:?}",
+                &path_to_network, &backup_name
+            )
+        })?;
+    }
     // Remove /etc/resolv.conf so that systemd knows it shouldn't touch resolv.conf
     if overwrites_potential_userfiles {
         let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(rootfs);
@@ -645,10 +659,6 @@ fn do_distro_specific_initialization(
     match detect_distro(rootfs).with_context(|| "Failed to detect distro.")? {
         Debian | Kali => initialize_debian_rootfs(rootfs, overwrites_potential_userfiles)
             .with_context(|| "Failed to do initialization for debian-based distros."),
-        Centos | Oracle | AlmaLinux | RockyLinux => {
-            initialize_centos_rootfs(rootfs, overwrites_potential_userfiles)
-                .with_context(|| "Failed to do initialization for centos-based distros.")
-        }
         _ => Ok(()),
     }
 }
@@ -656,10 +666,6 @@ fn do_distro_specific_initialization(
 enum DistroName {
     Debian,
     Kali,
-    Centos,
-    AlmaLinux,
-    Oracle,
-    RockyLinux,
     Undetected,
 }
 
@@ -676,10 +682,6 @@ fn detect_distro(rootfs: &HostPath) -> Result<DistroName> {
     match os_release?.get_env("ID").map(strip_quotes) {
         Some("debian") => Ok(DistroName::Debian),
         Some("kali") => Ok(DistroName::Kali),
-        Some("centos") => Ok(DistroName::Centos),
-        Some("almalinux") => Ok(DistroName::AlmaLinux),
-        Some("ol") => Ok(DistroName::Oracle),
-        Some("rocky") => Ok(DistroName::RockyLinux),
         _ => Ok(DistroName::Undetected),
     }
 }
@@ -730,33 +732,6 @@ fn put_readenv_in_sudo_pam(rootfs: &HostPath) -> Result<()> {
         .write_all(lines.join("\n").as_bytes())
         .with_context(|| format!("Failed to update {:?}", &pam_sudo_path))?;
 
-    Ok(())
-}
-
-fn initialize_centos_rootfs(
-    rootfs: &HostPath,
-    _overwrites_potential_userfiles: bool,
-) -> Result<()> {
-    disable_centos_network_initialization(rootfs)
-        .with_context(|| "Failed to disable CentOS-based network initialization.")?;
-    Ok(())
-}
-
-/// Prevent the network initialization of CentOS-based distros from resetting WSL's network interfaces
-fn disable_centos_network_initialization(rootfs: &HostPath) -> Result<()> {
-    let path_to_network =
-        ContainerPath::new("/etc/sysconfig/network-scripts/ifcfg-eth0")?.to_host_path(rootfs);
-    if path_to_network.exists() {
-        let backup_name =
-            ContainerPath::new("/etc/sysconfig/network-scripts/disabled-by-distrod.ifcfg-eth0")?
-                .to_host_path(rootfs);
-        fs::rename(&path_to_network, &backup_name).with_context(|| {
-            format!(
-                "Failed to move {:?} to {:?}",
-                &path_to_network, &backup_name
-            )
-        })?;
-    }
     Ok(())
 }
 
