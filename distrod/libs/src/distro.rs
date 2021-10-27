@@ -232,11 +232,11 @@ fn mount_wsl_envs_init_script(distro_launcher: &mut DistroLauncher) -> Result<()
     }
 
     let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
-    let host_sh_path = get_wsl_envs_init_sh_host_path(&real_user)?;
+    let host_sh_path = get_wsl_envs_init_sh_path(&real_user)?;
     env_shell_script
         .write(&host_sh_path)
         .with_context(|| "Failed to write the EnvShellScript.")?;
-    let container_sh_path = get_wsl_envs_init_sh_container_path(&real_user);
+    let container_sh_path = ContainerPath::new(get_wsl_envs_init_sh_path(&real_user)?)?;
 
     distro_launcher.with_mount(
         Some(host_sh_path),
@@ -547,7 +547,7 @@ fn append_wsl_envs_init_script_to_home_profile(
     let mut load_script = Template::new(String::from_utf8_lossy(bytes).into_owned());
     load_script.assign(
         "WSL_ENV_INIT_SH_PATH",
-        &get_shell_string_of_wsl_envs_init_sh_path_for_current_user(),
+        &get_shell_expression_of_wsl_envs_init_sh_path_for_login_user()?,
     );
     if let Some(mut skel_profile) = open_skel_profile(rootfs)? {
         skel_profile
@@ -616,22 +616,16 @@ fn open_dot_profile_at(
     Ok(Some(profile))
 }
 
-fn get_shell_string_of_wsl_envs_init_sh_path_for_current_user() -> String {
-    format!("/run/{}", &get_wsl_envs_init_sh_file_name("$(id -u)"))
+fn get_shell_expression_of_wsl_envs_init_sh_path_for_login_user() -> Result<String> {
+    get_distrod_runtime_files_dir_path().map(|path| {
+        let mut path_string = path.to_string_lossy().to_string();
+        path_string += "/";
+        path_string += &get_wsl_envs_init_sh_file_name("$(id -u)");
+        path_string
+    })
 }
 
-fn get_wsl_envs_init_sh_container_path(user: &Credential) -> ContainerPath {
-    ContainerPath::new("/run")
-        .map(|mut path| {
-            path.push(&get_wsl_envs_init_sh_file_name(
-                &user.uid.as_raw().to_string(),
-            ));
-            path
-        })
-        .expect("[BUG] the path given to ContainerPath::new should be absolute.")
-}
-
-fn get_wsl_envs_init_sh_host_path(user: &Credential) -> Result<HostPath> {
+fn get_wsl_envs_init_sh_path(user: &Credential) -> Result<HostPath> {
     get_distrod_runtime_files_dir_path().map(|mut path| {
         path.push(&get_wsl_envs_init_sh_file_name(
             &user.uid.as_raw().to_string(),
