@@ -126,7 +126,7 @@ jobs:
           sudo apt-get upgrade
           sudo apt-get install -y patchelf
           sudo apt-get install -y apt-file; sudo apt-file update
-          cargo install --git https://github.com/EmbarkStudios/cargo-about.git --branch main
+          cargo install --git https://github.com/EmbarkStudios/cargo-about.git --rev b4d194a734215f55a88191236cd5112ddb198920
 
       - name: Build the Distrod command
         run: make distrod-release
