@@ -177,34 +177,39 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
 
-    let uid = if !opts.root {
+    log::info!("Initializing the new Distrod distribution. This may take a while...");
+    wsl.launch_interactive(
+        distro_name,
+        format!(
+            "{} -l trace enable -d",
+            distrod_config::get_distrod_bin_path()
+        ),
+        true,
+    )
+    .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+
+    // This must be done after enable, because the enable step modifies /etc/skel
+    if !opts.root {
         let user_name = prompt_string("Please input the new Linux user name. This doesn't have to be the same as your Windows user name.", "user name", None)?;
         let uid = add_user(&wsl, distro_name, &user_name, tmp_dir);
         if uid.is_err() {
             log::warn!(
                 "Adding a user failed, but you can try adding a new user as the root after installation."
             );
+        } else {
+            wsl.configure_distribution(
+                distro_name,
+                uid.unwrap(),
+                wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT,
+            )
+            .with_context(|| "Failed to configure the default uid of the distribution.")?;
         }
-        uid.unwrap_or(0)
-    } else {
-        0
     };
 
-    log::info!("Initializing the new Distrod distribution. This may take a while...");
-    wsl.launch_interactive(
-        distro_name,
-        format!("{} enable -d", distrod_config::get_distrod_bin_path()),
-        true,
-    )
-    .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
     log::info!("Installation of Distrod has completed.");
-    if uid != 0 {
-        // This should be done after enable, because this changes the default user from root.
-        wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
-            .with_context(|| "Failed to configure the default uid of the distribution.")?;
-    }
+
     wsl.launch_interactive(distro_name, "", true)
-        .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+        .with_context(|| "Failed start a new session.")?;
     Ok(())
 }
 
