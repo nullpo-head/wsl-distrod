@@ -2,7 +2,7 @@ use crate::distro_image::{
     DefaultImageFetcher, DistroImage, DistroImageFetcher, DistroImageFile, DistroImageList,
     ListChooseFn,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use chrono::NaiveDateTime;
 
@@ -85,6 +85,7 @@ impl DistroImageFetcher for LxdDistroVersionList {
             .collect();
         let default = match self.get_name() {
             "ubuntu" => DefaultImageFetcher::Name("focal".to_owned()),
+            "debian" => DefaultImageFetcher::Name("buster".to_owned()),
             _ => DefaultImageFetcher::Index(versions.len() - 1),
         };
         Ok(DistroImageList::Fetcher(
@@ -150,8 +151,9 @@ async fn fetch_apache_file_list(relative_url: &str) -> Result<Vec<FileOnApache>>
     let doc = scraper::Html::parse_document(&apache_file_list_body);
     let dates: Vec<_> = doc.select(&date_selector).collect();
     let a_links: Vec<_> = doc.select(&a_link_selector).collect();
-    let links: Result<Vec<_>> = a_links[1..]
+    let links = a_links
         .iter()
+        .skip(1)
         .enumerate()
         .map(|(i, a)| {
             let name = a
@@ -186,8 +188,12 @@ async fn fetch_apache_file_list(relative_url: &str) -> Result<Vec<FileOnApache>>
                 })?,
             })
         })
-        .collect();
-    links.with_context(|| "Failed to parse the Apache file list page. Maybe the page is updated?")
+        .collect::<Result<Vec<_>>>()
+        .with_context(|| "Failed to parse the Apache file list page. Maybe the page is updated?")?;
+    if links.is_empty() {
+        bail!("{:?} is not available", &relative_url);
+    }
+    Ok(links)
 }
 
 #[derive(Debug)]
