@@ -155,6 +155,7 @@ impl ContainerLauncher {
     fn prepare_filesystem(&self, new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
         if new_root.as_path() == Path::new("/") {
             prepare_host_base_root(old_root)?;
+            self.process_mounts(old_root)?;
         } else {
             prepare_minimum_root(new_root, old_root)?;
             self.process_mounts(old_root)?;
