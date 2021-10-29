@@ -41,7 +41,7 @@ uninstall () {
 
 update () {
     cd /opt/distrod || error "Could not change directory to /opt/distrod"
-    #curl -O "$(get_latest_release_url)"
+    curl -O "$(get_latest_release_url)"
     EXCLUDE=""
     for FILE in /opt/distrod/conf/*; do
         FILE=${FILE#/opt/distrod/}
