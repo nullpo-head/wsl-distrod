@@ -11,7 +11,9 @@ distro_launcher/x64/Release/DistroLauncher-Appx/DistroLauncher-Appx_1.0.0.0_x64.
 distro_launcher/x64/distrod_wsl_launcher.exe: distrod_wsl_launcher
 
 distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz: $(ROOTFS_PATH)
-	cp $(ROOTFS_PATH) distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
+	if [ "$$(realpath "$(ROOTFS_PATH)" )" != "$$(realpath distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz)" ]; then \
+		cp $(ROOTFS_PATH) $@; \
+	fi
 
 distrod_wsl_launcher: distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
 	cd distrod; cargo.exe build --release -p distrod_wsl_launcher

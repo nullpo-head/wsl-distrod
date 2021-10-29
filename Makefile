@@ -1,12 +1,12 @@
-OUTPUT_ROOTFS_PATH ?= opt_distrod.tar.gz
+OUTPUT_ROOTFS_PATH ?= distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
 
 build: distrod-release
 
-rootfs:
+rootfs: distrod-bins distrod/target/release/portproxy.exe
 	./distrod_packer/distrod_packer ./distrod $(OUTPUT_ROOTFS_PATH)
 
 distrod-release: distrod-bins distrod/target/release/portproxy.exe
-	./distrod_packer/distrod_packer ./distrod $(OUTPUT_ROOTFS_PATH) --pack-distrod-opt-dir
+	./distrod_packer/distrod_packer ./distrod opt_distrod.tar.gz --pack-distrod-opt-dir
 
 distrod-bins:
 	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
@@ -40,7 +40,7 @@ ifneq ($(shell uname -a | grep microsoft),)  # This is a WSL environment, which 
 ROOTFS_PATH = $(OUTPUT_ROOTFS_PATH)
 OUTPUT_PORT_PROXY_EXE_PATH = distrod/target/release/portproxy.exe
 
-$(ROOTFS_PATH): distrod-release
+$(ROOTFS_PATH): rootfs
 include windows.mk
 
 .PHONY: $(ROOTFS_PATH)
