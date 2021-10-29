@@ -365,6 +365,12 @@ fn test_home_profile_initializes_additional_wsl_envs() {
     assert!(output.contains("distrod"));
 }
 
+#[tokio::test]
+async fn test_distro_download_url_is_live() {
+    let distro_image = fetch_lxd_image_by_distro_name(TestEnvironment::distro_in_testing()).await;
+    assert!(distro_image.is_ok());
+}
+
 struct DistrodSetup {
     name: String,
     bin_path: PathBuf,
@@ -432,7 +438,9 @@ async fn setup_distro_image(distro_name: &str) -> PathBuf {
     let local_cache = File::create(&local_cache_path).unwrap();
     let mut tar_xz = BufWriter::new(local_cache);
 
-    let distro_image = fetch_lxd_image_by_distro_name(distro_name.to_owned()).await;
+    let distro_image = fetch_lxd_image_by_distro_name(distro_name.to_owned())
+        .await
+        .unwrap();
     match distro_image.image {
         DistroImageFile::Local(_) => {
             panic!("The image file should not be a local file");
@@ -449,7 +457,7 @@ async fn setup_distro_image(distro_name: &str) -> PathBuf {
     local_cache_path
 }
 
-async fn fetch_lxd_image_by_distro_name(distro_name: String) -> DistroImage {
+async fn fetch_lxd_image_by_distro_name(distro_name: String) -> Result<DistroImage> {
     let choose_lxd_image_by_distro_name =
         move |list: DistroImageList| -> Result<Box<dyn DistroImageFetcher>> {
             match list {
@@ -477,9 +485,7 @@ async fn fetch_lxd_image_by_distro_name(distro_name: String) -> DistroImage {
                 }
             }
         };
-    fetch_lxd_image(&choose_lxd_image_by_distro_name)
-        .await
-        .unwrap()
+    fetch_lxd_image(&choose_lxd_image_by_distro_name).await
 }
 
 struct TestEnvironment;
