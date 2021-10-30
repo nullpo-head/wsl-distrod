@@ -3,7 +3,7 @@ use nom::{
     bytes::complete::{is_not, tag, take, take_while, take_while1},
     character::{
         complete::{char, line_ending, none_of, space0, space1},
-        is_alphanumeric, is_newline,
+        is_alphabetic, is_digit, is_newline,
     },
     combinator::{map_res, opt, recognize},
     multi::{many1, separated_list0},
@@ -306,7 +306,7 @@ fn leading_characters(line: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 fn declaration_key(line: &[u8]) -> IResult<&[u8], &[u8]> {
-    take_while1(is_alphanumeric)(line)
+    take_while1(|c| is_alphabetic(c) || is_digit(c) || c == b'_')(line)
 }
 
 fn declaration_value(line: &[u8]) -> IResult<&[u8], &[u8]> {
@@ -359,7 +359,7 @@ impl<'a> PathVariable<'a> {
         PathVariable {
             parsed_paths: paths,
             added_paths: vec![],
-            path_set: HashSet::<&str>::new(),
+            path_set,
             surrounding_quote,
         }
     }
@@ -508,6 +508,21 @@ mod test_path_variable {
             ],
             path.iter().collect::<Vec<&str>>()
         );
+    }
+
+    #[test]
+    fn test_add_existing_value() {
+        let path_value = "/usr/local/bin:/usr/bin:/sbin:/bin";
+        let mut path = PathVariable::parse(path_value);
+        assert_eq!(path_value, path.serialize().as_str());
+        path.put_path("/usr/local/bin");
+        assert_eq!("/usr/local/bin:/usr/bin:/sbin:/bin", path.serialize());
+
+        let path_value = "'/usr/local/bin:/usr/bin:/sbin:/bin'";
+        let mut path = PathVariable::parse(path_value);
+        assert_eq!(path_value, path.serialize().as_str());
+        path.put_path("/usr/local/bin");
+        assert_eq!("'/usr/local/bin:/usr/bin:/sbin:/bin'", path.serialize());
     }
 
     #[test]
@@ -802,21 +817,30 @@ mod test_env_file {
         let cont = "\
             # This is a comment line
 		    PATH=test:foo:bar  #comment preserved \n\
+            WSL_INTEROP=/run/foo\n\
 			FOO=foo\n\
             # This is another comment line
 			BAR=bar\n\
 			BAZ=baz=baz\n\
-			FOO=foo2\n\
+            QUOTED1='foo'\n\
+            QUOTED2=\"foo\"\n\
+			FOO=foo1\n\
 		";
         write!(&mut tmp, "{}", cont).unwrap();
         let mut env = EnvFile::open(tmp.path()).unwrap();
 
-        env.put_env("NEW1".to_owned(), "NEW1".to_owned());
+        env.put_env("NEW1".to_owned(), "TO_BE_OVERWRITTEN".to_owned());
         env.put_env(
             "PATH".to_owned(),
             format!("path:{}", env.get_env("PATH").unwrap()),
         );
+        env.put_env("FOO".to_owned(), "foo2".to_owned());
         env.put_env("FOO".to_owned(), "foo3".to_owned());
+        env.put_env("BAR".to_owned(), "bar2".to_owned());
+        env.put_env("NEW1".to_owned(), "NEW1".to_owned());
+        env.put_env("QUOTED1".to_owned(), "quoted1".to_owned());
+        env.put_env("QUOTED2".to_owned(), "quoted2".to_owned());
+        env.put_env("WSL_INTEROP".to_owned(), "/run/bar".to_owned());
 
         assert_eq!(env.get_env("None"), None);
         assert_eq!(env.get_env("NEW1"), Some("'NEW1'"));
@@ -827,15 +851,18 @@ mod test_env_file {
         let expected = "\
             # This is a comment line
 		    PATH='path:test:foo:bar'  #comment preserved \n\
+            WSL_INTEROP='/run/bar'\n\
 			FOO=foo\n\
             # This is another comment line
-			BAR=bar\n\
+			BAR='bar2'\n\
 			BAZ=baz=baz\n\
+            QUOTED1='quoted1'\n\
+            QUOTED2='quoted2'\n\
 			FOO='foo3'\n\
 			NEW1='NEW1'\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
-        assert_eq!(new_cont, expected);
+        assert_eq!(expected, new_cont);
     }
 
     #[test]
@@ -852,6 +879,7 @@ mod test_env_file {
 
         env.put_path("/to/path1".to_owned());
         env.put_path("/to/path2".to_owned());
+        env.put_path("/sbin".to_owned());
 
         assert_eq!(
             Some("\"/to/path2:/to/path1:/sbin:/bin\""),
