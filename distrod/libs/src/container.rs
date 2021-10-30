@@ -155,7 +155,7 @@ impl ContainerLauncher {
     fn prepare_filesystem(&self, new_root: &HostPath, old_root: &ContainerPath) -> Result<()> {
         if new_root.as_path() == Path::new("/") {
             prepare_host_base_root(old_root)?;
-            self.process_mounts(old_root)?;
+            self.process_mounts(&ContainerPath::new("/")?)?;
         } else {
             prepare_minimum_root(new_root, old_root)?;
             self.process_mounts(old_root)?;
@@ -171,6 +171,11 @@ impl ContainerLauncher {
             create_mountpoint_unless_exist(mount.target.as_path(), mount.is_file)
                 .with_context(|| format!("Failed to create mountpoint {:?}", mount.target))?;
             let source = mount.source.as_ref().map(|p| p.to_container_path(old_root));
+            if source.as_ref() == Some(&mount.target) {
+                log::trace!("skipping an identical mount: {:#?}, {:#?}", source, mount);
+                continue;
+            }
+            log::trace!("mounting source: {:#?}, mount: {:?}", &source, &mount);
             nix::mount::mount(
                 source.as_ref().map(|p| p.as_path()),
                 mount.target.as_path(),
@@ -397,7 +402,7 @@ fn umount_host_mountpoints(old_root: &ContainerPath, mount_entries: &[MountEntry
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerPath(PathBuf);
 
 impl ContainerPath {
@@ -446,7 +451,7 @@ impl DerefMut for ContainerPath {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPath(PathBuf);
 
 impl HostPath {
