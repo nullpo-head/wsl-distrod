@@ -1,6 +1,6 @@
 #!/bin/sh
 
-ORIG="$(PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin command -v chsh)"
+ORIG="$(PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin command -v adduser)"
 if [ -t 0 ]; then
     echo "[Distrod] Run 'sudo /opt/distrod/bin/distrod enable' after this command succeeds." >&2
     echo "[Distrod] It's necessary for Systemd to work as the pseudo init process." >&2
