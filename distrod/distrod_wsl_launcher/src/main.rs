@@ -45,8 +45,6 @@ pub enum Subcommand {
 pub struct InstallOpts {
     #[structopt(long)]
     root: bool,
-    #[structopt(short, long)]
-    distro_name: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -101,10 +99,7 @@ fn run_distro(distro_name: &str, opts: RunOpts) -> Result<()> {
         .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
 
     if !wsl.is_distribution_registered(distro_name) {
-        let install_opts = InstallOpts {
-            root: false,
-            distro_name: None,
-        };
+        let install_opts = InstallOpts { root: false };
         return install_distro(distro_name, install_opts);
     }
 
@@ -206,7 +201,7 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
         }
     };
 
-    log::info!("Installation of Distrod has completed.");
+    log::info!("Installation of Distrod is now complete.");
 
     wsl.launch_interactive(distro_name, "", true)
         .with_context(|| "Failed start a new session.")?;
