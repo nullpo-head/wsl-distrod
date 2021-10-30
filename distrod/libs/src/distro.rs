@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use nix::unistd::{Gid, Uid};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
@@ -13,7 +14,7 @@ use crate::distrod_config::{self, DistrodConfig};
 use crate::envfile::{EnvFile, EnvShellScript};
 use crate::mount_info::get_mount_entries;
 pub use crate::multifork::Waiter;
-use crate::passwd::{get_real_credential, Credential, PasswdFile};
+use crate::passwd::{get_real_credential, Credential};
 use crate::procfile::ProcFile;
 use crate::systemdunit::{get_existing_systemd_unit, SystemdUnitDisabler, SystemdUnitOverride};
 use crate::template::Template;
@@ -40,7 +41,7 @@ impl DistroLauncher {
         };
         set_wsl_interop_envs_in_system_envs(&mut distro_launcher)
             .with_context(|| "failed to set up WSL interop env vars")?;
-        mount_wsl_envs_init_script(&mut distro_launcher)
+        mount_per_user_wsl_envs_script(&mut distro_launcher)
             .with_context(|| "failed to mount WSL environment variables init script.")?;
         mount_slash_run_static_files(&mut distro_launcher)
             .with_context(|| "Failed to mount /run files.")?;
@@ -153,6 +154,11 @@ impl DistroLauncher {
 }
 
 fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
+    // Be careful to collect only harmless environment variables.
+    // Distrod can be running as setuid program. So, non-root user can set arbitrary values.
+    // mount_per_user_wsl_envs_script and its family should source those arbitrary values instead.
+    // Actually, this doesn't matter for now because WSL allows a non-root user to be root by `wsl.exe -u root`,
+    // but be prepared for this WSL spec to be improved in a safer direction someday.
     let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
     let envs_to_set = [OsStr::new("WSL_INTEROP"), OsStr::new("WSLENV")];
     for (key, value) in &wsl_envs {
@@ -219,7 +225,7 @@ where
     arg
 }
 
-fn mount_wsl_envs_init_script(distro_launcher: &mut DistroLauncher) -> Result<()> {
+fn mount_per_user_wsl_envs_script(distro_launcher: &mut DistroLauncher) -> Result<()> {
     let mut env_shell_script = EnvShellScript::new();
     for (key, value) in collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")? {
         env_shell_script.put_env(
@@ -232,11 +238,12 @@ fn mount_wsl_envs_init_script(distro_launcher: &mut DistroLauncher) -> Result<()
     }
 
     let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
-    let host_sh_path = get_wsl_envs_init_sh_path(&real_user)?;
+    let host_sh_path = get_per_user_wsl_envs_init_script_path(&real_user)?;
     env_shell_script
         .write(&host_sh_path)
         .with_context(|| "Failed to write the EnvShellScript.")?;
-    let container_sh_path = ContainerPath::new(get_wsl_envs_init_sh_path(&real_user)?)?;
+    let container_sh_path =
+        ContainerPath::new(get_per_user_wsl_envs_init_script_path(&real_user)?)?;
 
     distro_launcher.with_mount(
         Some(host_sh_path),
@@ -424,8 +431,8 @@ pub fn do_distro_independent_initialization(
     disable_incompatible_systemd_network_configuration(rootfs, overwrites_potential_userfiles)?;
     disable_incompatible_systemd_services(rootfs);
     disable_incompatible_systemd_service_options(rootfs);
-    append_wsl_envs_init_script_to_home_profile(rootfs, overwrites_potential_userfiles)
-        .with_context(|| "Failed to initialize ~/.profile")?;
+    create_per_user_wsl_envs_init_loader_script(rootfs)
+        .with_context(|| "Failed to create per-user WSL envs load script.")?;
     Ok(())
 }
 
@@ -550,103 +557,56 @@ fn disable_incompatible_systemd_service_options(rootfs: &HostPath) {
     }
 }
 
-fn append_wsl_envs_init_script_to_home_profile(
-    rootfs: &HostPath,
-    overwrites_potential_userfiles: bool,
-) -> Result<()> {
-    if !overwrites_potential_userfiles {
-        return Ok(());
-    }
-    let bytes = include_bytes!("../resources/wsl_envs_load_profile.sh");
+fn create_per_user_wsl_envs_init_loader_script(rootfs: &HostPath) -> Result<()> {
+    let bytes = include_bytes!("../resources/load_per_user_wsl_envs.sh");
     let mut load_script = Template::new(String::from_utf8_lossy(bytes).into_owned());
     load_script.assign(
-        "WSL_ENV_INIT_SH_PATH",
-        &get_shell_expression_of_wsl_envs_init_sh_path_for_login_user()?,
+        "PER_USER_WSL_ENV_INIT_SCRIPT_PATH",
+        &get_per_user_wsl_envs_init_script_shellexp()?,
     );
-    if let Some(mut skel_profile) = open_skel_profile(rootfs)? {
-        skel_profile
-            .write_all(load_script.render().as_bytes())
-            .with_context(|| "Failed to write to skel's .profile")?;
-    } else {
-        log::debug!("The skel directory is not found");
-    }
-    // '/root' is already initialized and the change to the skel is not applied.
-    // So, append the script to /root/.profile, too.
-    if let Some(mut root_profile) = open_root_profile(rootfs)? {
-        root_profile
-            .write_all(load_script.render().as_bytes())
-            .with_context(|| "Failed to write to skel's .profile")?;
-    } else {
-        log::debug!("The home directory of root is not found");
-    }
+    load_script.assign(
+        "ROOT_USER_WSL_ENV_INIT_SCRIPT_PATH",
+        get_per_user_wsl_envs_init_script_path(&Credential::new(
+            Uid::from_raw(0),
+            Gid::from_raw(0),
+            vec![],
+        ))?
+        .to_str()
+        .ok_or_else(|| {
+            anyhow!("Failed to get the path to the per-user WSL env init script for root.")
+        })?,
+    );
+    let profile_dot_d_path =
+        ContainerPath::new("/etc/profile.d/distrod-user-wsl-envs.sh")?.to_host_path(rootfs);
+    let mut profile_dot_d = BufWriter::new(
+        File::create(&profile_dot_d_path)
+            .with_context(|| format!("Failed to create {:?}", &profile_dot_d_path))?,
+    );
+    profile_dot_d
+        .write_all(load_script.render().as_bytes())
+        .with_context(|| format!("Failed to write to {:?}", rootfs))?;
     Ok(())
 }
 
-fn open_skel_profile(rootfs: &HostPath) -> Result<Option<impl Write>> {
-    let mut skel_dir = ContainerPath::new("/etc/skel")?;
-    if !skel_dir.to_host_path(rootfs).exists() {
-        return Ok(None);
-    }
-    open_dot_profile_at(rootfs, &mut skel_dir)
-}
-
-fn open_root_profile(rootfs: &HostPath) -> Result<Option<impl Write>> {
-    let passwd_path = ContainerPath::new("/etc/passwd")?.to_host_path(rootfs);
-    let mut passwd = PasswdFile::open(&passwd_path)
-        .with_context(|| format!("Failed to open {:?}", &passwd_path))?;
-    match passwd
-        .get_ent_by_uid(0)
-        .with_context(|| "Failed to get entry for root")?
-    {
-        Some(entry) => open_dot_profile_at(
-            rootfs,
-            &mut ContainerPath::new(entry.dir).with_context(|| {
-                format!(
-                    "/etc/passwd has root's home directory as a relative path: {:?}",
-                    entry.dir
-                )
-            })?,
-        ),
-        None => Ok(None),
-    }
-}
-
-fn open_dot_profile_at(
-    rootfs: &HostPath,
-    profile_dir: &mut ContainerPath,
-) -> Result<Option<impl Write>> {
-    profile_dir.push(".profile");
-    let profile_path = profile_dir;
-    let profile_path = profile_path.to_host_path(rootfs);
-    let profile = BufWriter::new(
-        fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&profile_path)
-            .with_context(|| format!("Failed to open {:?}", &profile_path))?,
-    );
-    Ok(Some(profile))
-}
-
-fn get_shell_expression_of_wsl_envs_init_sh_path_for_login_user() -> Result<String> {
+fn get_per_user_wsl_envs_init_script_shellexp() -> Result<String> {
     get_distrod_runtime_files_dir_path().map(|path| {
         let mut path_string = path.to_string_lossy().to_string();
         path_string += "/";
-        path_string += &get_wsl_envs_init_sh_file_name("$(id -u)");
+        path_string += &get_per_user_wsl_envs_init_script_name("$(id -u)");
         path_string
     })
 }
 
-fn get_wsl_envs_init_sh_path(user: &Credential) -> Result<HostPath> {
+fn get_per_user_wsl_envs_init_script_path(user: &Credential) -> Result<HostPath> {
     get_distrod_runtime_files_dir_path().map(|mut path| {
-        path.push(&get_wsl_envs_init_sh_file_name(
+        path.push(&get_per_user_wsl_envs_init_script_name(
             &user.uid.as_raw().to_string(),
         ));
         path
     })
 }
 
-fn get_wsl_envs_init_sh_file_name(uid: &str) -> String {
+fn get_per_user_wsl_envs_init_script_name(uid: &str) -> String {
     format!("distrod_wsl_env-uid{}", uid)
 }
 

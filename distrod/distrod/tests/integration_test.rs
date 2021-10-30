@@ -330,14 +330,14 @@ fn test_wslg_socket_is_available() {
 fn test_home_profile_initializes_additional_wsl_envs() {
     let mut echo_distro_name = DISTROD_SETUP.new_command();
     echo_distro_name.env_clear();
-    echo_distro_name.env("HOME", "/root");
     echo_distro_name.env("WSL_DISTRO_NAME", "");
     echo_distro_name.args(&[
         "exec",
         "--",
         "bash",
+        "--login",
         "-c",
-        ". $HOME/.profile; echo $WSL_DISTRO_NAME",
+        "echo $WSL_DISTRO_NAME",
     ]);
     let output = echo_distro_name.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
@@ -349,20 +349,20 @@ fn test_home_profile_initializes_additional_wsl_envs() {
     assert!(child.success());
     let mut cat_profile = DISTROD_SETUP.new_command();
     cat_profile.env_clear();
-    cat_profile.env("HOME", "/home/test_user");
+    cat_profile.env("WSL_DISTRO_NAME", "");
     cat_profile.args(&[
         "exec",
         "--user",
         "test_user",
         "--",
         "bash",
+        "--login",
         "-c",
-        "cat $HOME/.profile",
+        "echo $WSL_DISTRO_NAME",
     ]);
     let output = cat_profile.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
-    eprintln!("output: {}", output);
-    assert!(output.contains("distrod"));
+    assert_eq!("DUMMY_DISTRO", output.trim());
 }
 
 #[tokio::test]
