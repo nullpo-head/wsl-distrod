@@ -264,8 +264,11 @@ fn mount_per_user_wsl_envs_script(distro_launcher: &mut DistroLauncher) -> Resul
 }
 
 fn mount_slash_run_static_files(distro_launcher: &mut DistroLauncher) -> Result<()> {
-    for path in glob::glob(&format!("{}/**/*", distrod_config::get_distrod_run_dir()))
-        .with_context(|| "glob failed.")?
+    for path in glob::glob(&format!(
+        "{}/**/*",
+        distrod_config::get_distrod_run_overlay_dir()
+    ))
+    .with_context(|| "glob failed.")?
     {
         let path = path?;
         log::trace!("mount_distrod_run_files: path: {:?}", &path);
@@ -274,12 +277,12 @@ fn mount_slash_run_static_files(distro_launcher: &mut DistroLauncher) -> Result<
         }
         let dest_mount_path = ContainerPath::new(
             Path::new("/run").join(
-                path.strip_prefix(distrod_config::get_distrod_run_dir())
+                path.strip_prefix(distrod_config::get_distrod_run_overlay_dir())
                     .with_context(|| {
                         format!(
                             "[BUG] {:?} should starts with {:?}",
                             &path,
-                            distrod_config::get_distrod_run_dir()
+                            distrod_config::get_distrod_run_overlay_dir()
                         )
                     })?,
             ),
