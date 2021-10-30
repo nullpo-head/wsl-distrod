@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 
 const DISTRO_OLD_ROOT_PATH: &str = "/mnt/distrod_root";
 
-#[derive(Debug, Clone)]
 pub struct DistroLauncher {
     rootfs: Option<PathBuf>,
     system_envs: HashMap<String, String>,
@@ -136,6 +135,14 @@ impl DistroLauncher {
         self.container_launcher
             .with_init_env("container", "distrod") // See https://systemd.io/CONTAINER_INTERFACE/
             .with_init_arg("--unit=multi-user.target");
+        unsafe {
+            self.container_launcher.with_init_pre_exec(|| {
+                // Systemd requires the real uid / gid to be the root.
+                nix::unistd::setuid(Uid::from_raw(0))?;
+                nix::unistd::setgid(Gid::from_raw(0))?;
+                Ok(())
+            });
+        };
         let container = self
             .container_launcher
             .launch(
@@ -565,7 +572,7 @@ fn create_per_user_wsl_envs_init_loader_script(rootfs: &HostPath) -> Result<()> 
         &get_per_user_wsl_envs_init_script_shellexp()?,
     );
     load_script.assign(
-        "ROOT_USER_WSL_ENV_INIT_SCRIPT_PATH",
+        "ROOT_WSL_ENV_INIT_SCRIPT_PATH",
         get_per_user_wsl_envs_init_script_path(&Credential::new(
             Uid::from_raw(0),
             Gid::from_raw(0),

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use libs::cli_ui::{init_logger, LogLevel};
 use libs::distro::{self, Distro, DistroLauncher};
 use libs::multifork::set_noninheritable_sig_ign;
-use nix::unistd::{Gid, Uid};
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
@@ -81,12 +80,7 @@ where
             .with_context(|| "Failed to get the running distro.")?
         {
             Some(distro) => distro,
-            None => {
-                // Systemd requires the real uid / gid to be the root.
-                nix::unistd::setuid(Uid::from_raw(0))?;
-                nix::unistd::setgid(Gid::from_raw(0))?;
-                launch_distro()?
-            }
+            None => launch_distro()?,
         };
 
         log::debug!("Executing a command in the distro.");

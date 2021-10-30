@@ -10,5 +10,5 @@ fi
 
 # If the creator of the script is root, a non-root user loading it is harmless
 if [ "$(id -u)" != 0 ] && [ -e "{{ROOT_WSL_ENV_INIT_SCRIPT_PATH}}" ]; then
-    . "{{ROOT_ENV_INIT_SCRIPT_PATH}}"
+    . "{{ROOT_WSL_ENV_INIT_SCRIPT_PATH}}"
 fi

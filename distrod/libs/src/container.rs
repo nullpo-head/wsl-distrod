@@ -15,11 +15,12 @@ use crate::multifork::{CommandByMultiFork, Waiter};
 use crate::passwd::Credential;
 use crate::procfile::ProcFile;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default)]
 pub struct ContainerLauncher {
     mounts: Vec<ContainerMount>,
     init_envs: Vec<(OsString, OsString)>,
     init_args: Vec<OsString>,
+    pre_exec_closures: Vec<Box<dyn FnMut() -> Result<()> + Send + Sync + 'static>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,8 +91,19 @@ impl ContainerLauncher {
         self
     }
 
+    /// # Safety
+    /// See the notes and safety of https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.pre_exec
+    /// In addition, note that registered pre_exec closures will run after the rootfs is set up including tmpfs such as /run.
+    pub unsafe fn with_init_pre_exec<F>(&mut self, f: F) -> &mut Self
+    where
+        F: FnMut() -> Result<()> + Send + Sync + 'static,
+    {
+        self.pre_exec_closures.push(Box::new(f));
+        self
+    }
+
     pub fn launch<S: AsRef<OsStr>>(
-        self,
+        mut self,
         init: S,
         rootfs: HostPath,
         old_root: ContainerPath,
@@ -99,7 +111,7 @@ impl ContainerLauncher {
         let (fd_channel_host, fd_channel_child) = UnixStream::pair()?;
         {
             let mut command = Command::new(&init);
-            // Systemd must not inherit environment variables from the parent process which may
+            // The init must not inherit environment variables from the parent process which may
             // be launcehd by a non-root user.
             command.env_clear();
             command.args(&self.init_args);
@@ -114,7 +126,7 @@ impl ContainerLauncher {
             });
             unsafe {
                 command.pre_exec(move || {
-                    let inner = || -> Result<()> {
+                    let mut inner = || -> Result<()> {
                         let procfile = ProcFile::current_proc()
                             .with_context(|| "Failed to make a ProcFile.")?;
                         fd_channel_child
@@ -124,11 +136,17 @@ impl ContainerLauncher {
 
                         self.prepare_filesystem(&rootfs, &old_root)
                             .with_context(|| "Failed to initialize the container's filesystem.")?;
+
+                        for pre_exec_closure in &mut self.pre_exec_closures {
+                            pre_exec_closure().with_context(|| {
+                                "a registered pre_exec closure of the init process failed."
+                            })?;
+                        }
                         Ok(())
                     };
                     if let Err(err) = inner().with_context(|| "Failed to send pidfd.") {
                         log::error!("{:?}", err);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                     Ok(())
                 });
