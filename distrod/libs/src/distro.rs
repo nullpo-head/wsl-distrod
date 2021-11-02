@@ -168,7 +168,11 @@ fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> 
     // Actually, this doesn't matter for now because WSL allows a non-root user to be root by `wsl.exe -u root`,
     // but be prepared for this WSL spec to be improved in a safer direction someday.
     let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
-    let envs_to_set = [OsStr::new("WSL_INTEROP"), OsStr::new("WSLENV")];
+    let envs_to_set = [
+        OsStr::new("WSL_INTEROP"),
+        OsStr::new("WSLENV"),
+        OsStr::new("WSL_DISTRO_NAME"),
+    ];
     for (key, value) in &wsl_envs {
         if !envs_to_set.contains(&key.as_os_str()) {
             continue;

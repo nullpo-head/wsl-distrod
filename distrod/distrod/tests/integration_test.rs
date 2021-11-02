@@ -327,7 +327,22 @@ fn test_wslg_socket_is_available() {
 }
 
 #[test]
-fn test_home_profile_initializes_additional_wsl_envs() {
+fn test_profile_initializes_additional_wsl_envs() {
+    let mut echo_distro_name = DISTROD_SETUP.new_command();
+    echo_distro_name.env_clear();
+    echo_distro_name.env("WSL_DISTRO_NAME", "");
+    echo_distro_name.args(&[
+        "exec",
+        "--",
+        "bash",
+        "-c",
+        "echo ETC_ENVIRONMENT=loaded >> /etc/environment; echo $WSL_DISTRO_NAME",
+    ]);
+    let output = echo_distro_name.output().unwrap();
+    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert_eq!("", output.trim());
+
     let mut echo_distro_name = DISTROD_SETUP.new_command();
     echo_distro_name.env_clear();
     echo_distro_name.env("WSL_DISTRO_NAME", "");
@@ -337,9 +352,11 @@ fn test_home_profile_initializes_additional_wsl_envs() {
         "bash",
         "--login",
         "-c",
-        "echo $WSL_DISTRO_NAME",
+        // make sure WSL_DISTRO_NAME is initialized by profile.d, not by /etc/environment
+        "echo -ne $ETC_ENVIRONMENT; echo $WSL_DISTRO_NAME",
     ]);
     let output = echo_distro_name.output().unwrap();
+    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     let output = String::from_utf8_lossy(&output.stdout);
     assert_eq!("DUMMY_DISTRO", output.trim());
 
@@ -358,7 +375,8 @@ fn test_home_profile_initializes_additional_wsl_envs() {
         "bash",
         "--login",
         "-c",
-        "echo $WSL_DISTRO_NAME",
+        // make sure WSL_DISTRO_NAME is initialized by profile.d, not by /etc/environment
+        "echo -ne $ETC_ENVIRONMENT; echo $WSL_DISTRO_NAME",
     ]);
     let output = cat_profile.output().unwrap();
     let output = String::from_utf8_lossy(&output.stdout);
