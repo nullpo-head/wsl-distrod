@@ -341,22 +341,20 @@ fn exec_command(opts: ExecOpts) -> Result<()> {
     }
     let distro = distro.unwrap();
 
-    let host_root_path = OsString::from("/");
-    let rootfs_path = HostPath::new(opts.rootfs.as_ref().unwrap_or(&host_root_path))?;
+    let passwd_path =
+        ContainerPath::new("/etc/passwd")?.to_host_path(&HostPath::new(distro.get_rootfs())?);
     let cred = opts
         .uid
         .map(|uid| {
-            Ok(get_credential_from_passwd_file(
-                opts.user.as_ref(),
-                Some(uid),
-                &ContainerPath::new("/etc/passwd")?.to_host_path(&rootfs_path),
+            Ok(
+                get_credential_from_passwd_file(opts.user.as_ref(), Some(uid), &passwd_path)
+                    .with_context(|| format!("Failed to open the passwd file. {:?}", &passwd_path))?
+                    .unwrap_or(Credential {
+                        uid: Uid::from_raw(uid),
+                        gid: Gid::from_raw(uid),
+                        groups: vec![Gid::from_raw(uid)],
+                    }),
             )
-            .with_context(|| format!("Failed to open passwd file. {:?}", &rootfs_path))?
-            .unwrap_or(Credential {
-                uid: Uid::from_raw(uid),
-                gid: Gid::from_raw(uid),
-                groups: vec![Gid::from_raw(uid)],
-            }))
         })
         .map_or(Ok(None), |v: Result<_>| v.map(Some))
         .with_context(|| "Failed to get credentail.")?;

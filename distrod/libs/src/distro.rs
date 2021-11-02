@@ -60,6 +60,7 @@ impl DistroLauncher {
             return Ok(None);
         }
         Ok(Some(Distro {
+            rootfs: run_info.rootfs,
             container: ContainerLauncher::from_pid(run_info.init_pid)?,
         }))
     }
@@ -155,7 +156,7 @@ impl DistroLauncher {
         export_distro_run_info(&rootfs, container.init_pid)
             .with_context(|| "Failed to export the Distro running information.")?;
 
-        let distro = Distro { container };
+        let distro = Distro { rootfs, container };
         Ok(distro)
     }
 }
@@ -369,6 +370,7 @@ fn write_system_env_files(
 }
 
 pub struct Distro {
+    rootfs: PathBuf,
     container: Container,
 }
 
@@ -379,6 +381,10 @@ pub struct DistroRunInfo {
 }
 
 impl Distro {
+    pub fn get_rootfs(&self) -> &Path {
+        self.rootfs.as_path()
+    }
+
     pub fn exec_command<I, S, T1, T2, P>(
         &self,
         command: S,
