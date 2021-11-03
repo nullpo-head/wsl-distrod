@@ -126,7 +126,9 @@ impl DistroLauncher {
             .ok_or_else(|| anyhow!("rootfs is not initialized."))?
             .clone();
 
-        if rootfs != Path::new("/") {
+        if rootfs == Path::new("/") {
+            make_host_mountpoints_shared().with_context(|| "Failed to make mountpoint shared.")?;
+        } else {
             mount_wsl_mountpoints(&mut self).with_context(|| "Failed to mount WSL mountpoints.")?;
         }
 
@@ -317,7 +319,7 @@ fn mount_wsl_mountpoints(distro_launcher: &mut DistroLauncher) -> Result<()> {
     ];
     for (bind_file, is_file) in binds {
         if !Path::new(bind_file).exists() {
-            log::warn!("WSL path {:?} does not exist.", bind_file);
+            log::debug!("WSL path {:?} does not exist.", bind_file);
             continue;
         }
         distro_launcher.with_mount(
@@ -350,6 +352,20 @@ fn mount_wsl_mountpoints(distro_launcher: &mut DistroLauncher) -> Result<()> {
             false,
         );
     }
+    Ok(())
+}
+
+fn make_host_mountpoints_shared() -> Result<()> {
+    // Share the mount modification the distro may make with the host mount namespace
+    // by MS_SHARED so that WSL's file sharing feature can see them.
+    nix::mount::mount::<Path, _, OsStr, OsStr>(
+        Some(Path::new("/tmp")),
+        Path::new("/tmp"),
+        None,
+        nix::mount::MsFlags::MS_SHARED | nix::mount::MsFlags::MS_BIND,
+        None,
+    )
+    .with_context(|| "Failed to make the /tmp mountpoint shared.")?;
     Ok(())
 }
 
