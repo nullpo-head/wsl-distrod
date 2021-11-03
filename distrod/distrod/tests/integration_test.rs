@@ -383,6 +383,18 @@ fn test_profile_initializes_additional_wsl_envs() {
     assert_eq!("DUMMY_DISTRO", output.trim());
 }
 
+#[test]
+fn test_distrod_is_in_path() {
+    let mut echo_distrod_path = DISTROD_SETUP.new_command();
+    echo_distrod_path.env_clear();
+    echo_distrod_path.args(&["exec", "--", "bash", "--login", "-c", "echo $PATH"]);
+    let output = echo_distrod_path.output().unwrap();
+    eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let output = String::from_utf8_lossy(&output.stdout);
+    eprintln!("stdout: {}", output);
+    assert!(output.contains("/opt/distrod/bin"));
+}
+
 #[tokio::test]
 async fn test_distro_download_url_is_live() {
     let distro_image = fetch_lxd_image_by_distro_name(TestEnvironment::distro_in_testing()).await;

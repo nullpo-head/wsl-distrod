@@ -27,6 +27,8 @@ pub struct DistroLauncher {
     rootfs: Option<PathBuf>,
     system_envs: HashMap<String, String>,
     system_paths: HashSet<String>,
+    per_user_envs: HashMap<String, String>,
+    per_user_paths: HashSet<(String, bool)>,
     container_launcher: ContainerLauncher,
 }
 
@@ -36,15 +38,18 @@ impl DistroLauncher {
             rootfs: None,
             system_envs: HashMap::new(),
             system_paths: HashSet::new(),
+            per_user_envs: HashMap::new(),
+            per_user_paths: HashSet::new(),
             container_launcher: ContainerLauncher::new(),
         };
         set_wsl_interop_envs_in_system_envs(&mut distro_launcher)
             .with_context(|| "failed to set up WSL interop env vars")?;
-        mount_per_user_wsl_envs_script(&mut distro_launcher)
+        set_per_user_wsl_envs(&mut distro_launcher)
             .with_context(|| "failed to mount WSL environment variables init script.")?;
         mount_slash_run_static_files(&mut distro_launcher)
             .with_context(|| "Failed to mount /run files.")?;
-        distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
+        prepend_distrod_bin_to_path(&mut distro_launcher)
+            .with_context(|| "Failed to set the distrod bin dir in PATH.")?;
         Ok(distro_launcher)
     }
 
@@ -91,6 +96,16 @@ impl DistroLauncher {
         self
     }
 
+    pub fn with_per_user_env(&mut self, key: String, val: String) -> &mut Self {
+        self.per_user_envs.insert(key, val);
+        self
+    }
+
+    pub fn with_per_user_path(&mut self, path: String, prepends: bool) -> &mut Self {
+        self.per_user_paths.insert((path, prepends));
+        self
+    }
+
     pub fn with_init_arg<O: AsRef<OsStr>>(&mut self, arg: O) -> &mut Self {
         self.container_launcher.with_init_arg(arg);
         self
@@ -132,6 +147,8 @@ impl DistroLauncher {
             mount_wsl_mountpoints(&mut self).with_context(|| "Failed to mount WSL mountpoints.")?;
         }
 
+        self.mount_per_user_envs_script()
+            .with_context(|| "Failed to mount per-user envs script.")?;
         write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
             .with_context(|| "Failed to write system env file.")?;
 
@@ -160,6 +177,35 @@ impl DistroLauncher {
 
         let distro = Distro { rootfs, container };
         Ok(distro)
+    }
+
+    fn mount_per_user_envs_script(&mut self) -> Result<()> {
+        let mut env_shell_script = EnvShellScript::new();
+        for (key, value) in &self.per_user_envs {
+            env_shell_script.put_env(key.clone(), value.clone());
+        }
+        for (path, prepends) in &self.per_user_paths {
+            env_shell_script.put_path(path.clone(), *prepends);
+        }
+
+        let real_user =
+            get_real_credential().with_context(|| "Failed to get the real credentail.")?;
+        let host_sh_path = get_per_user_envs_init_script_path(&real_user)?;
+        env_shell_script.write(&host_sh_path).with_context(|| {
+            format!("Failed to write the EnvShellScript at {:?}.", &host_sh_path)
+        })?;
+        let container_sh_path =
+            ContainerPath::new(get_per_user_envs_init_script_path(&real_user)?)?;
+
+        self.container_launcher.with_mount(
+            Some(host_sh_path),
+            container_sh_path,
+            None,
+            nix::mount::MsFlags::MS_BIND,
+            None,
+            true,
+        );
+        Ok(())
     }
 }
 
@@ -239,34 +285,16 @@ where
     arg
 }
 
-fn mount_per_user_wsl_envs_script(distro_launcher: &mut DistroLauncher) -> Result<()> {
-    let mut env_shell_script = EnvShellScript::new();
+fn set_per_user_wsl_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
     for (key, value) in collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")? {
-        env_shell_script.put_env(
+        distro_launcher.with_per_user_env(
             key.to_string_lossy().to_string(),
             value.to_string_lossy().to_string(),
         );
     }
     for path in collect_wsl_paths().with_context(|| "Failed to collect WSL paths.")? {
-        env_shell_script.put_path(path);
+        distro_launcher.with_per_user_path(path, false);
     }
-
-    let real_user = get_real_credential().with_context(|| "Failed to get the real credentail.")?;
-    let host_sh_path = get_per_user_wsl_envs_init_script_path(&real_user)?;
-    env_shell_script
-        .write(&host_sh_path)
-        .with_context(|| "Failed to write the EnvShellScript.")?;
-    let container_sh_path =
-        ContainerPath::new(get_per_user_wsl_envs_init_script_path(&real_user)?)?;
-
-    distro_launcher.with_mount(
-        Some(host_sh_path),
-        container_sh_path,
-        None,
-        nix::mount::MsFlags::MS_BIND,
-        None,
-        true,
-    );
     Ok(())
 }
 
@@ -303,6 +331,12 @@ fn mount_slash_run_static_files(distro_launcher: &mut DistroLauncher) -> Result<
             true,
         );
     }
+    Ok(())
+}
+
+fn prepend_distrod_bin_to_path(distro_launcher: &mut DistroLauncher) -> Result<()> {
+    distro_launcher.with_system_path(distrod_config::get_distrod_bin_dir_path().to_owned());
+    distro_launcher.with_per_user_path(distrod_config::get_distrod_bin_dir_path().to_owned(), true);
     Ok(())
 }
 
@@ -467,7 +501,7 @@ pub fn do_distro_independent_initialization(
     disable_incompatible_systemd_network_configuration(rootfs, overwrites_potential_userfiles)?;
     disable_incompatible_systemd_services(rootfs);
     disable_incompatible_systemd_service_options(rootfs);
-    create_per_user_wsl_envs_init_loader_script(rootfs)
+    create_per_user_envs_init_loader_script(rootfs)
         .with_context(|| "Failed to create per-user WSL envs load script.")?;
     Ok(())
 }
@@ -593,16 +627,16 @@ fn disable_incompatible_systemd_service_options(rootfs: &HostPath) {
     }
 }
 
-fn create_per_user_wsl_envs_init_loader_script(rootfs: &HostPath) -> Result<()> {
+fn create_per_user_envs_init_loader_script(rootfs: &HostPath) -> Result<()> {
     let bytes = include_bytes!("../resources/load_per_user_wsl_envs.sh");
     let mut load_script = Template::new(String::from_utf8_lossy(bytes).into_owned());
     load_script.assign(
         "PER_USER_WSL_ENV_INIT_SCRIPT_PATH",
-        &get_per_user_wsl_envs_init_script_shellexp()?,
+        &get_per_user_envs_init_script_shellexp()?,
     );
     load_script.assign(
         "ROOT_WSL_ENV_INIT_SCRIPT_PATH",
-        get_per_user_wsl_envs_init_script_path(&Credential::new(
+        get_per_user_envs_init_script_path(&Credential::new(
             Uid::from_raw(0),
             Gid::from_raw(0),
             vec![],
@@ -624,25 +658,25 @@ fn create_per_user_wsl_envs_init_loader_script(rootfs: &HostPath) -> Result<()> 
     Ok(())
 }
 
-fn get_per_user_wsl_envs_init_script_shellexp() -> Result<String> {
+fn get_per_user_envs_init_script_shellexp() -> Result<String> {
     get_distrod_runtime_files_dir_path().map(|path| {
         let mut path_string = path.to_string_lossy().to_string();
         path_string += "/";
-        path_string += &get_per_user_wsl_envs_init_script_name("$(id -u)");
+        path_string += &get_per_user_envs_init_script_name("$(id -u)");
         path_string
     })
 }
 
-fn get_per_user_wsl_envs_init_script_path(user: &Credential) -> Result<HostPath> {
+fn get_per_user_envs_init_script_path(user: &Credential) -> Result<HostPath> {
     get_distrod_runtime_files_dir_path().map(|mut path| {
-        path.push(&get_per_user_wsl_envs_init_script_name(
+        path.push(&get_per_user_envs_init_script_name(
             &user.uid.as_raw().to_string(),
         ));
         path
     })
 }
 
-fn get_per_user_wsl_envs_init_script_name(uid: &str) -> String {
+fn get_per_user_envs_init_script_name(uid: &str) -> String {
     format!("distrod_wsl_env-uid{}", uid)
 }
 

@@ -24,7 +24,7 @@ use anyhow::{anyhow, Context, Result};
 #[derive(Debug, Clone, Default)]
 pub struct EnvShellScript {
     envs: HashMap<String, String>,
-    paths: HashSet<String>,
+    paths: HashMap<String, bool>,
 }
 
 impl EnvShellScript {
@@ -36,8 +36,8 @@ impl EnvShellScript {
         self.envs.insert(key, value);
     }
 
-    pub fn put_path(&mut self, path: String) {
-        self.paths.insert(path);
+    pub fn put_path(&mut self, path: String, prepends: bool) {
+        self.paths.insert(path, prepends);
     }
 
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
@@ -69,15 +69,25 @@ impl EnvShellScript {
         }
         let mut paths: Vec<_> = self.paths.iter().collect();
         paths.sort();
-        for path in paths {
+        for (path, prepends) in paths {
             script.push_str(&format!(
                 "__CANDIDATE_PATH={}\n\
-                 __COLON_PATH=\":${{PATH}}:\"\n\
-                 if [ \"${{__COLON_PATH#*:${{__CANDIDATE_PATH}}:}}\" = \"${{__COLON_PATH}}\" ]; then export PATH=\"${{__CANDIDATE_PATH}}:${{PATH}}\"; fi\n\
-                 unset __CANDIDATE_PATH\n\
-                 unset __COLON_PATH\n",
+                 __COLON_PATH=\":${{PATH}}:\"\n",
                 single_quote_str_for_shell(path)
             ));
+            if *prepends {
+                script.push_str(
+                 "if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${__CANDIDATE_PATH}:${PATH}\"; fi\n"
+                );
+            } else {
+                script.push_str(
+                 "if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${PATH}:${__CANDIDATE_PATH}\"; fi\n"
+                );
+            }
+            script.push_str(
+                "unset __CANDIDATE_PATH\n\
+                 unset __COLON_PATH\n",
+            );
         }
         script
     }
@@ -423,18 +433,24 @@ mod test_env_shell_script {
         env_shell_script.put_env("var_space".to_owned(), "value with space".to_owned());
         env_shell_script.put_env("var2".to_owned(), "val2 again".to_owned());
 
-        env_shell_script.put_path("/path/to/somewhere".to_owned());
-        env_shell_script.put_path("/path/with space/somewhere".to_owned());
-        env_shell_script.put_path("/path/to/somewhere".to_owned());
+        env_shell_script.put_path("/path/to/somewhere".to_owned(), true);
+        env_shell_script.put_path("/path/with space/somewhere".to_owned(), true);
+        env_shell_script.put_path("/path/to/somewhere".to_owned(), false);
+        env_shell_script.put_path("/less_prio/path".to_owned(), false);
 
         let script = env_shell_script.gen_shell_script();
         assert_eq!(
             "if [ -z \"${var1:-}\" ]; then export var1='val1'; fi\n\
              if [ -z \"${var2:-}\" ]; then export var2='val2 again'; fi\n\
              if [ -z \"${var_space:-}\" ]; then export var_space='value with space'; fi\n\
+             __CANDIDATE_PATH='/less_prio/path'\n\
+             __COLON_PATH=\":${PATH}:\"\n\
+             if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${PATH}:${__CANDIDATE_PATH}\"; fi\n\
+             unset __CANDIDATE_PATH\n\
+             unset __COLON_PATH\n\
              __CANDIDATE_PATH='/path/to/somewhere'\n\
              __COLON_PATH=\":${PATH}:\"\n\
-             if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${__CANDIDATE_PATH}:${PATH}\"; fi\n\
+             if [ \"${__COLON_PATH#*:${__CANDIDATE_PATH}:}\" = \"${__COLON_PATH}\" ]; then export PATH=\"${PATH}:${__CANDIDATE_PATH}\"; fi\n\
              unset __CANDIDATE_PATH\n\
              unset __COLON_PATH\n\
              __CANDIDATE_PATH='/path/with space/somewhere'\n\
@@ -451,10 +467,10 @@ mod test_env_shell_script {
         let mut env_shell_script = EnvShellScript::new();
         env_shell_script.put_env("var_space".to_owned(), "value with space".to_owned());
         env_shell_script.put_env("existing_var".to_owned(), "updated".to_owned());
-        env_shell_script.put_path("/path/to/somewhere".to_owned());
-        env_shell_script.put_path("/path/with space/somewhere".to_owned());
-        env_shell_script.put_path("/path/with space/somewhere".to_owned());
-        env_shell_script.put_path("/bin".to_owned());
+        env_shell_script.put_path("/path/to/somewhere".to_owned(), true);
+        env_shell_script.put_path("/path/with space/somewhere".to_owned(), true);
+        env_shell_script.put_path("/path/with space/somewhere".to_owned(), true);
+        env_shell_script.put_path("/bin".to_owned(), true);
 
         let mut script = env_shell_script.gen_shell_script();
         script.push_str(

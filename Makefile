@@ -12,7 +12,7 @@ distrod-bins:
 	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
 
 unit-test-linux:
-	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec
+	cd distrod; cargo test --verbose -p libs -p portproxy -p distrod-exec ${TEST_TARGETS}
 
 integration-test-linux:
 	cd distrod/distrod/tests; ./test_runner.sh run
