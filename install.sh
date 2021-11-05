@@ -2,6 +2,8 @@
 
 set -e
 
+LATEST_RELEASE_URL="https://github.com/nullpo-head/wsl-distrod/releases/latest/download/opt_distrod.tar.gz"
+
 HELP_STR="Usage: $0 <command>
 
 command:
@@ -20,7 +22,7 @@ error_help () {
 install () {
     mkdir /opt/distrod || error "Failed to create /opt/distrod."
     cd /opt/distrod || error "Could not change directory to /opt/distrod"
-    curl -O "$(get_latest_release_url)"
+    curl -L -O "${LATEST_RELEASE_URL}"
     tar xvf opt_distrod.tar.gz
     rm opt_distrod.tar.gz
     echo "Installation is complete!"
@@ -41,7 +43,7 @@ uninstall () {
 
 update () {
     cd /opt/distrod || error "Could not change directory to /opt/distrod"
-    curl -O "$(get_latest_release_url)"
+    curl -L -O "${LATEST_RELEASE_URL}"
     EXCLUDE=""
     for FILE in /opt/distrod/conf/*; do
         FILE=${FILE#/opt/distrod/}
@@ -53,20 +55,12 @@ update () {
     done
     # shellcheck disable=SC2086
     tar xvf opt_distrod.tar.gz $EXCLUDE
-    echo "Distrod has been updated!"
-}
-
-
-REPO="nullpo-head/wsl-distrod"
-LATEST_RELEASE_URL=""
-
-get_latest_release_url () {
-    if [ -n "$LATEST_RELEASE_URL" ]; then
-        echo "$LATEST_RELEASE_URL"
+    echo "Ruuning post-update actions..."
+    POST_UPDATE="/opt/distrod/misc/distrod-post-update"
+    if [ -e "${POST_UPDATE}" ]; then
+        "${POST_UPDATE}"
     fi
-    TAG=$(curl --silent "https://api.github.com/repos/$REPO/releases/latest" | grep tag_name | grep -Eo 'v[0-9.]*')
-    LATEST_RELEASE_URL="https://github.com/$REPO/releases/download/$TAG/opt_distrod.tar.gz"
-    printf "%s" "$LATEST_RELEASE_URL"
+    echo "Distrod has been updated!"
 }
 
 error () {

@@ -1,0 +1,5 @@
+#!/bin/sh
+
+set -e
+
+/opt/distrod/bin/distrod enable
