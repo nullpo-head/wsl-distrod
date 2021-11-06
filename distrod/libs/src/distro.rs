@@ -5,7 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::os::linux::fs::MetadataExt;
-use std::os::unix::prelude::CommandExt;
+use std::os::unix::prelude::{CommandExt, OsStrExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -44,6 +44,8 @@ impl DistroLauncher {
         };
         set_wsl_interop_envs_in_system_envs(&mut distro_launcher)
             .with_context(|| "failed to set up WSL interop env vars")?;
+        mount_kernelcmdline_with_wsl_interop_envs_for_systemd(&mut distro_launcher)
+            .with_context(|| "Failed to mount the custom /proc/cmdline")?;
         set_per_user_wsl_envs(&mut distro_launcher)
             .with_context(|| "failed to mount WSL environment variables init script.")?;
         mount_slash_run_static_files(&mut distro_launcher)
@@ -211,26 +213,9 @@ impl DistroLauncher {
 }
 
 fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
-    // Be careful to collect only harmless environment variables.
-    // Distrod can be running as setuid program. So, non-root user can set arbitrary values.
-    // mount_per_user_wsl_envs_script and its family should source those arbitrary values instead.
-    // Actually, this doesn't matter for now because WSL allows a non-root user to be root by `wsl.exe -u root`,
-    // but be prepared for this WSL spec to be improved in a safer direction someday.
-    let wsl_envs = collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")?;
-    let envs_to_set = [
-        OsStr::new("WSL_INTEROP"),
-        OsStr::new("WSLENV"),
-        OsStr::new("WSL_DISTRO_NAME"),
-    ];
-    for (key, value) in &wsl_envs {
-        if !envs_to_set.contains(&key.as_os_str()) {
-            continue;
-        }
-        if !sanity_check_wsl_env(key, value) {
-            log::warn!("sanity check of {:?} failed.", &key);
-            // stop handling this and further envs
-            break;
-        }
+    for (key, value) in collect_safe_wsl_interop_envs()
+        .with_context(|| "Failed to collect safe WSL interop envs")?
+    {
         distro_launcher.with_system_env(
             key.to_string_lossy().to_string(),
             value.to_string_lossy().to_string(),
@@ -242,8 +227,78 @@ fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> 
     Ok(())
 }
 
+fn mount_kernelcmdline_with_wsl_interop_envs_for_systemd(
+    distro_launcher: &mut DistroLauncher,
+) -> Result<()> {
+    let cmdline_overwrite_path = get_cmdline_overwrite_path()
+        .with_context(|| "Failed to get the /proc/cmdline overwrite path.")?;
+    std::fs::write(
+        cmdline_overwrite_path.as_path(),
+        get_cmdline_with_wsl_interop_envs_for_systemd("/proc/cmdline")
+            .with_context(|| "Failed to generate the contents of new /proc/cmdline")?,
+    )
+    .with_context(|| format!("Failed to write to {:?}", &cmdline_overwrite_path))?;
+
+    distro_launcher.with_mount(
+        Some(HostPath::new(cmdline_overwrite_path)?), // /run is bind-mounted
+        ContainerPath::new("/proc/cmdline")?,
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+        true,
+    );
+    Ok(())
+}
+
+fn get_cmdline_with_wsl_interop_envs_for_systemd<P: AsRef<Path>>(
+    cmdline_path: P,
+) -> Result<Vec<u8>> {
+    let mut cmdline = std::fs::read(cmdline_path.as_ref())
+        .with_context(|| format!("Failed to read {:?}.", cmdline_path.as_ref()))?;
+    if cmdline.ends_with("\n".as_bytes()) {
+        cmdline.truncate(cmdline.len() - 1);
+    }
+
+    // Set default environment vairables for the systemd services.
+    for (key, value) in
+        collect_safe_wsl_interop_envs().with_context(|| "Failed to collect WSL envs.")?
+    {
+        cmdline.extend(" ".as_bytes());
+        cmdline.extend(env_to_systemd_setenv_arg(&key, &value).as_bytes());
+    }
+    cmdline.extend("\n".as_bytes());
+
+    Ok(cmdline)
+}
+
+fn collect_safe_wsl_interop_envs() -> Result<Vec<(OsString, OsString)>> {
+    // Collect only harmless environment variables.
+    // Distrod can be running as setuid program. So, non-root user can set arbitrary values.
+    // Thus, mount_per_user_wsl_envs_script or similar functions should collect only restricted value.
+    // Actually, this doesn't matter for now because WSL allows a non-root user to be root by `wsl.exe -u root`,
+    // but be prepared for this WSL spec to be improved in a safer direction someday.
+    let mut envs = vec![];
+    let envs_to_set = [
+        OsStr::new("WSL_INTEROP"),
+        OsStr::new("WSLENV"),
+        OsStr::new("WSL_DISTRO_NAME"),
+    ];
+    for (key, value) in collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")? {
+        if !envs_to_set.contains(&key.as_os_str()) {
+            continue;
+        }
+        if !sanity_check_wsl_env(&key, &value) {
+            log::warn!("sanity check of {:?} failed.", &key);
+            // stop handling this and further envs
+            continue;
+        }
+        envs.push((key, value));
+    }
+    Ok(envs)
+}
+
 /// Make sure that the values of WSL_INTEROP, WSLENV, and WSL_DISTRO_NAME are harmless values that can be
-/// written to /etc/environment and passed to Systemd service processes. These values may be polluted
+/// written to /etc/environment and passed to Systemd via /proc/cmdline. These values may be polluted
 /// because distrod-exec can be launched by any user.
 fn sanity_check_wsl_env(key: &OsStr, value: &OsStr) -> bool {
     if key == OsStr::new("WSL_INTEROP") {
@@ -267,11 +322,18 @@ fn sanity_check_wsl_interop(value: &OsStr) -> bool {
 fn sanity_check_general_wsl_envs(value: &OsStr) -> bool {
     // sanity check for WSLENV and WSL_INTEROP
     let inner = || -> Result<bool> {
-        let harmless_pattern = regex::Regex::new("^[a-zA-Z0-9_\\-./:]*$")?;
+        let harmless_pattern = regex::Regex::new(r#"^([a-zA-Z0-9_./:]|-)*$"#)?;
         let str = value.to_str().ok_or_else(|| anyhow!("non-UTF8 value."))?;
         Ok(harmless_pattern.is_match(str))
     };
     inner().unwrap_or(false)
+}
+
+fn get_cmdline_overwrite_path() -> Result<HostPath> {
+    get_distrod_runtime_files_dir_path().map(|mut path| {
+        path.push("cmdline");
+        path
+    })
 }
 
 fn env_to_systemd_setenv_arg<K, V>(key: K, value: V) -> OsString
