@@ -22,7 +22,7 @@ error_help () {
 install () {
     mkdir /opt/distrod || error "Failed to create /opt/distrod."
     cd /opt/distrod || error "Could not change directory to /opt/distrod"
-    curl -L -O "${LATEST_RELEASE_URL}"
+    get_release_file
     tar xvf opt_distrod.tar.gz
     rm opt_distrod.tar.gz
     echo "Installation is complete!"
@@ -43,7 +43,7 @@ uninstall () {
 
 update () {
     cd /opt/distrod || error "Could not change directory to /opt/distrod"
-    curl -L -O "${LATEST_RELEASE_URL}"
+    get_release_file
     EXCLUDE=""
     for FILE in /opt/distrod/conf/*; do
         FILE=${FILE#/opt/distrod/}
@@ -63,6 +63,14 @@ update () {
     echo "Distrod has been updated!"
 }
 
+get_release_file() {
+    if [ -n "$RELEASE_FILE" ]; then
+        cp "$RELEASE_FILE" opt_distrod.tar.gz
+    else
+        curl -L -O "${LATEST_RELEASE_URL}"
+    fi
+}
+
 error () {
     echo "$@" >&2
 }
@@ -78,29 +86,37 @@ if [ "$(whoami)" != "root" ]; then
     exit 1
 fi
 
-case "$1" in
--h|--help)
-    echo "$HELP_STR"
-    exit 0
-    ;;
-install)
-    install
-    exit 0
-    ;;
-uninstall)
-    uninstall
-    exit 0
-    ;;
-update)
-    update
-    exit 0
-    ;;
--*)
-    error "Error: Unknown flag $1"
-    exit 1
-    ;;
-*) # preserve positional arguments
-    error "Error: Unknown command $1"
-    exit 1
-    ;;
-esac
+COMMAND=
+while [ -n "$1" ]; do
+    case "$1" in
+    -h|--help)
+        echo "$HELP_STR"
+        exit 0
+        ;;
+    install)
+        COMMAND=install
+        ;;
+    uninstall)
+        COMMAND=uninstall
+        shift
+        ;;
+    update)
+        COMMAND=update
+        shift
+        ;;
+    -r|--release-file)
+        RELEASE_FILE="$(realpath "$2")"
+        shift 2
+        ;;
+    -*)
+        error "Error: Unknown flag $1"
+        exit 1
+        ;;
+    *) # preserve positional arguments
+        error "Error: Unknown command $1"
+        exit 1
+        ;;
+    esac
+done
+
+"$COMMAND"
