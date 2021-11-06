@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use libs::cli_ui::{build_progress_bar, choose_from_list, init_logger, prompt_path, LogLevel};
+use libs::cli_ui::{build_progress_bar, choose_from_list, init_logger, prompt_path};
 use libs::container::{ContainerPath, HostPath};
 use libs::distrod_config::{self, DistrodConfig};
 use libs::local_image::LocalDistroImage;
@@ -29,8 +29,9 @@ mod shell_hook;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod")]
 pub struct Opts {
+    /// Log level in the env_logger format. Simple levels: trace, debug, info(default), warn, error.
     #[structopt(short, long)]
-    pub log_level: Option<LogLevel>,
+    pub log_level: Option<String>,
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
@@ -105,7 +106,7 @@ pub struct DisableOpts {}
 
 fn main() {
     if is_executed_as_alias() {
-        init_logger("Distrod".to_owned(), LogLevel::Info);
+        init_logger("Distrod".to_owned(), None);
         if let Err(err) = run_as_command_alias() {
             log::error!("{:?}", err);
         }
@@ -113,10 +114,12 @@ fn main() {
     }
 
     let opts = Opts::from_args();
-    init_logger(
-        "Distrod".to_owned(),
-        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
-    );
+    let log_level = opts.log_level.as_ref().cloned().or_else(|| {
+        DistrodConfig::get()
+            .ok()
+            .and_then(|config| config.distrod.log_level.clone())
+    });
+    init_logger("Distrod".to_owned(), log_level);
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
@@ -276,7 +279,7 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
         Some(install_dir) => install_dir,
         None => {
             let def_install_path =
-                DistrodConfig::get().with_context(|| "Failed to ghet the Distrod config.")?;
+                DistrodConfig::get().with_context(|| "Failed to get the Distrod config.")?;
             def_install_path
                 .distrod
                 .distro_images_dir

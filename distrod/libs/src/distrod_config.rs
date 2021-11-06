@@ -22,6 +22,8 @@ pub struct DistrodConfig {
 pub struct DistrodGlobalConfig {
     pub default_distro_image: PathBuf,
     pub distro_images_dir: PathBuf,
+    pub log_level: Option<String>,
+    pub kmsg_log_level: Option<String>,
 }
 
 static DISTROD_ROOT_DIR: &str = "/opt/distrod";

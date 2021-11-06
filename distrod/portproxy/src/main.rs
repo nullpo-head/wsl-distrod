@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use libs::cli_ui::{init_logger, LogLevel};
+use libs::cli_ui::init_logger;
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames};
 use tokio::io::AsyncWriteExt;
@@ -9,8 +9,9 @@ use tokio::net::{TcpListener, TcpStream};
 #[derive(Debug, StructOpt)]
 #[structopt(name = "portproxy", rename_all = "kebab")]
 pub struct Opts {
+    /// Log level in the env_logger format. Simple levels: trace, debug, info(default), warn, error.
     #[structopt(short, long)]
-    pub log_level: Option<LogLevel>,
+    pub log_level: Option<String>,
     #[structopt(subcommand)]
     pub command: Subcommand,
 }
@@ -44,10 +45,7 @@ pub enum ShowItem {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::from_args();
-    init_logger(
-        "PortProxy".to_owned(),
-        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
-    );
+    init_logger("PortProxy".to_owned(), opts.log_level.clone());
 
     if let Err(e) = run(opts).await {
         log::error!("{:?}", e);

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use libs::cli_ui::{init_logger, LogLevel};
+use libs::cli_ui::LoggerInitializer;
 use libs::distro::{self, Distro, DistroLauncher};
+use libs::distrod_config::DistrodConfig;
 use libs::multifork::set_noninheritable_sig_ign;
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::prelude::OsStrExt;
@@ -19,16 +20,37 @@ pub struct Opts {
     pub arg0: OsString,
     pub args: Vec<String>,
 
+    /// Log level in the env_logger format. Simple levels: trace, debug, info(default), warn, error.
     #[structopt(short, long)]
-    pub log_level: Option<LogLevel>,
+    pub log_level: Option<String>,
+
+    /// /dev/kmsg log level in the env_logger format. Simple levels: trace, debug, info, warn, error(default).
+    #[structopt(short, long)]
+    pub kmsg_log_level: Option<String>,
 }
 
 fn main() {
     let opts = Opts::from_args();
-    init_logger(
-        "Distrod".to_owned(),
-        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
-    );
+
+    let mut logger_initializer = LoggerInitializer::default();
+    let distrod_config = DistrodConfig::get();
+    if let Some(log_level) = opts.log_level.as_ref().cloned().or_else(|| {
+        distrod_config
+            .as_ref()
+            .ok()
+            .and_then(|config| config.distrod.log_level.clone())
+    }) {
+        logger_initializer.with_log_level(log_level);
+    }
+    logger_initializer.with_kmsg(true);
+    if let Some(kmsg_log_level) = opts.kmsg_log_level.as_ref().cloned().or_else(|| {
+        distrod_config
+            .ok()
+            .and_then(|ref config| config.distrod.kmsg_log_level.clone())
+    }) {
+        logger_initializer.with_kmsg_log_level(kmsg_log_level);
+    }
+    logger_initializer.init("Distrod".to_owned());
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
@@ -37,9 +59,10 @@ fn main() {
 
 fn run(opts: Opts) -> Result<()> {
     if distro::is_inside_running_distro() {
-        exec_command(&opts.command, &opts.arg0, &opts.args)
+        exec_command(&opts.command, &opts.arg0, &opts.args).with_context(|| "exec_command failed.")
     } else {
         exec_command_in_distro(&opts.command, &opts.arg0, &opts.args)
+            .with_context(|| "exec_command_in_distro failed.")
     }
 }
 
@@ -49,7 +72,7 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
-    let cred = get_real_credential()?;
+    let cred = get_real_credential().with_context(|| "Failed to get the real credential.")?;
     cred.drop_privilege();
 
     let path = CString::new(command.as_ref().as_os_str().as_bytes()).with_context(|| {
@@ -74,7 +97,7 @@ where
     S2: AsRef<OsStr>,
 {
     let inner = || -> Result<()> {
-        let cred = get_real_credential()?;
+        let cred = get_real_credential().with_context(|| "Failed to get the real credential.")?;
 
         let distro = match DistroLauncher::get_running_distro()
             .with_context(|| "Failed to get the running distro.")?
@@ -105,7 +128,8 @@ where
 }
 
 fn launch_distro() -> Result<Distro> {
-    let mut distro_launcher = DistroLauncher::new()?;
+    let mut distro_launcher =
+        DistroLauncher::new().with_context(|| "Failed to init a DistroLauncher")?;
     distro_launcher
         .from_default_distro()
         .with_context(|| "Failed to get the default distro.")?;

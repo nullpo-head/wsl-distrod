@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use libs::cli_ui::{self, build_progress_bar, LogLevel};
+use libs::cli_ui::{self, build_progress_bar};
 use libs::cli_ui::{init_logger, prompt_string};
 use libs::distro_image::{
     self, download_file_with_progress, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
@@ -25,8 +25,9 @@ static DISTRO_NAME: &str = "Distrod";
 #[derive(Debug, StructOpt)]
 #[structopt(name = "distrod-install", rename_all = "kebab")]
 pub struct Opts {
+    /// Log level in the env_logger format. Simple levels: trace, debug, info(default), warn, error.
     #[structopt(short, long)]
-    pub log_level: Option<LogLevel>,
+    pub log_level: Option<String>,
     #[structopt(short, long)]
     pub distro_name: Option<String>,
     #[structopt(subcommand)]
@@ -62,10 +63,7 @@ pub struct ConfigOpts {
 
 fn main() {
     let opts = Opts::from_args();
-    init_logger(
-        "Distrod".to_owned(),
-        *opts.log_level.as_ref().unwrap_or(&LogLevel::Info),
-    );
+    init_logger("Distrod".to_owned(), opts.log_level.clone());
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);

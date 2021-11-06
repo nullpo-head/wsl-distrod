@@ -135,6 +135,7 @@ impl DistroLauncher {
     }
 
     pub fn launch(mut self) -> Result<Distro> {
+        log::debug!("DistroLauncher::launch");
         let rootfs = self
             .rootfs
             .as_ref()

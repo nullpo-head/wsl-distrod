@@ -229,10 +229,12 @@ impl Container {
             enter_namespace(&self.init_procfile)
                 .with_context(|| "Failed to enter the init's namespace")?;
             if let Some(cred) = cred {
+                log::debug!("dropping privilege. kmsg logging in the child ends here.");
                 cred.drop_privilege();
             }
             Ok(())
         });
+        // To do a double fork in the new namespace and set the parent of the new child to init.
         command.do_triple_fork(true);
         let waiter = command
             .insert_waiter_proxy()
@@ -240,7 +242,7 @@ impl Container {
         command
             .spawn()
             .with_context(|| "Container::exec_command failed")?;
-        log::debug!("Double fork done.");
+        log::debug!("Triple fork done.");
         Ok(waiter)
     }
 
