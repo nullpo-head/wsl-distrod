@@ -111,12 +111,12 @@ mount_overlay() {
 prepare_for_nested_distrod() {
     # Enter a new mount namespace for testing.
     # To make distrod think it's not inside another distrod,
-    # 1. Delete /run/distrod.json without affecting the running distrod by 
+    # 1. Delete /run/distrod without affecting the running distrod by 
     #    mounting overlay
     # 2. Unmount directories under /mnt/distrod_root, which is a condition 
     #    distrod checks
     mount_overlay /run
-    sudo rm -f /run/distrod
+    sudo rm -rf /run/distrod
     sudo umount /mnt/distrod_root/proc || true  # may not exist
 }
 
