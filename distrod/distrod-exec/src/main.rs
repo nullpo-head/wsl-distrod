@@ -32,6 +32,14 @@ pub struct Opts {
 fn main() {
     let opts = Opts::from_args();
 
+    init_logger(&opts);
+
+    if let Err(err) = run(opts) {
+        log::error!("{:?}", err);
+    }
+}
+
+fn init_logger(opts: &Opts) {
     let mut logger_initializer = LoggerInitializer::default();
     let distrod_config = DistrodConfig::get();
     if let Some(log_level) = opts.log_level.as_ref().cloned().or_else(|| {
@@ -51,10 +59,6 @@ fn main() {
         logger_initializer.with_kmsg_log_level(kmsg_log_level);
     }
     logger_initializer.init("Distrod".to_owned());
-
-    if let Err(err) = run(opts) {
-        log::error!("{:?}", err);
-    }
 }
 
 fn run(opts: Opts) -> Result<()> {
