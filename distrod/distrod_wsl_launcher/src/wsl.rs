@@ -12,7 +12,7 @@ use windows::{
 pub unsafe fn is_distribution_registered<'a, Param0: IntoParam<'a, PWSTR>>(
     distributionname: Param0,
 ) -> bool {
-    unsafe { WslIsDistributionRegistered(distributionname).as_bool() }
+    WslIsDistributionRegistered(distributionname).as_bool()
 }
 
 pub unsafe fn register_distribution<'a, Param0, Path0>(
@@ -29,7 +29,7 @@ where
         targzfilename.as_ref()
     );
     let path = targzfilename.as_ref().as_os_str();
-    unsafe { WslRegisterDistribution(distributionname, path).with_context(|| err) }
+    WslRegisterDistribution(distributionname, path).with_context(|| err)
 }
 
 pub unsafe fn set_distribution_default_user<'a, Param0: IntoParam<'a, PWSTR> + std::fmt::Debug>(
@@ -43,10 +43,7 @@ pub unsafe fn set_distribution_default_user<'a, Param0: IntoParam<'a, PWSTR> + s
     let default_distro_flag = WSL_DISTRIBUTION_FLAGS_ENABLE_INTEROP
         | WSL_DISTRIBUTION_FLAGS_APPEND_NT_PATH
         | WSL_DISTRIBUTION_FLAGS_ENABLE_DRIVE_MOUNTING;
-    unsafe {
-        WslConfigureDistribution(distributionname, defaultuid, default_distro_flag)
-            .with_context(|| err)
-    }
+    WslConfigureDistribution(distributionname, defaultuid, default_distro_flag).with_context(|| err)
 }
 
 #[derive(Debug)]
