@@ -3,11 +3,11 @@ use std::{fs::File, io::BufWriter, path::PathBuf, process::Command, time::Durati
 use anyhow::{Context, Result};
 use libs::{
     cli_ui::build_progress_bar,
+    container_org_image::fetch_container_org_image,
     distro_image::{
         download_file_with_progress, DefaultImageFetcher, DistroImage, DistroImageFetcher,
         DistroImageFile, DistroImageList,
     },
-    lxd_image::fetch_lxd_image,
 };
 use once_cell::sync::Lazy;
 
@@ -410,7 +410,8 @@ fn test_distrod_is_in_path() {
 
 #[tokio::test]
 async fn test_distro_download_url_is_live() {
-    let distro_image = fetch_lxd_image_by_distro_name(TestEnvironment::distro_in_testing()).await;
+    let distro_image =
+        fetch_container_org_image_by_distro_name(TestEnvironment::distro_in_testing()).await;
     assert!(distro_image.is_ok());
 }
 
@@ -481,7 +482,7 @@ async fn setup_distro_image(distro_name: &str) -> PathBuf {
     let local_cache = File::create(&local_cache_path).unwrap();
     let mut tar_xz = BufWriter::new(local_cache);
 
-    let distro_image = fetch_lxd_image_by_distro_name(distro_name.to_owned())
+    let distro_image = fetch_container_org_image_by_distro_name(distro_name.to_owned())
         .await
         .unwrap();
     match distro_image.image {
@@ -500,8 +501,8 @@ async fn setup_distro_image(distro_name: &str) -> PathBuf {
     local_cache_path
 }
 
-async fn fetch_lxd_image_by_distro_name(distro_name: String) -> Result<DistroImage> {
-    let choose_lxd_image_by_distro_name =
+async fn fetch_container_org_image_by_distro_name(distro_name: String) -> Result<DistroImage> {
+    let choose_container_org_image_by_distro_name =
         move |list: DistroImageList| -> Result<Box<dyn DistroImageFetcher>> {
             match list {
                 DistroImageList::Fetcher(_, fetchers, default) => {
@@ -528,7 +529,7 @@ async fn fetch_lxd_image_by_distro_name(distro_name: String) -> Result<DistroIma
                 }
             }
         };
-    fetch_lxd_image(&choose_lxd_image_by_distro_name).await
+    fetch_container_org_image(&choose_container_org_image_by_distro_name).await
 }
 
 struct TestEnvironment;

@@ -3,12 +3,12 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use libs::cli_ui::{self, build_progress_bar};
 use libs::cli_ui::{init_logger, prompt_string};
+use libs::container_org_image::ContainerOrgImageList;
 use libs::distro_image::{
     self, download_file_with_progress, DistroImageFetcher, DistroImageFetcherGen, DistroImageFile,
 };
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
-use libs::lxd_image::LxdDistroImageList;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read};
@@ -143,16 +143,16 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
   BTW, you can run Systemd with distrod, so you can try LXC/LXD with distrod!
 ================================================================================="
     );
-    let lxd_root_tarxz = fetch_distro_image()
+    let container_org_root_tarxz = fetch_distro_image()
         .await
         .with_context(|| "Failed to fetch a distro image.")?;
-    let lxd_tar = tar::Archive::new(XzDecoder::new(lxd_root_tarxz));
+    let container_org_tar = tar::Archive::new(XzDecoder::new(container_org_root_tarxz));
 
     log::info!(
         "Unpacking and merging the given rootfs to the distrod rootfs. This may take a while..."
     );
     let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
-    let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
+    let install_targz_path = merge_tar_archive(&tmp_dir, container_org_tar)?;
 
     log::info!("Now Windows is installing the new distribution. This may take a while...");
     register_distribution(distro_name, &install_targz_path)
@@ -209,11 +209,11 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
 async fn fetch_distro_image() -> Result<Box<dyn Read>> {
     let local_image_fetcher =
         || Ok(Box::new(LocalDistroImage::new(&cli_ui::prompt_path)) as Box<dyn DistroImageFetcher>);
-    let lxd_image_fetcher =
-        || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
+    let container_org_image_fetcher =
+        || Ok(Box::new(ContainerOrgImageList::default()) as Box<dyn DistroImageFetcher>);
     let fetchers = vec![
         Box::new(local_image_fetcher) as DistroImageFetcherGen,
-        Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
+        Box::new(container_org_image_fetcher) as DistroImageFetcherGen,
     ];
     let image = distro_image::fetch_image(fetchers, &cli_ui::choose_from_list, 1)
         .await
@@ -247,9 +247,9 @@ fn merge_tar_archive<R: Read>(work_dir: &TempDir, mut rootfs: tar::Archive<R>) -
 
     let mut builder = tar::Builder::new(encoder);
     append_tar_archive(&mut builder, &mut rootfs)
-        .with_context(|| "Failed to merge the downloaded LXD image.")?;
+        .with_context(|| "Failed to merge the given image.")?;
     append_tar_archive(&mut builder, &mut distrod_tar)
-        .with_context(|| "Failed to merge the downloaded LXD image.")?;
+        .with_context(|| "Failed to merge the given image.")?;
     builder.finish()?;
     drop(builder); // So that we can close the install_targz file.
     Ok(install_targz_path)

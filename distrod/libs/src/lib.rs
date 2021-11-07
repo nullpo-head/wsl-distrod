@@ -1,8 +1,8 @@
 pub mod cli_ui;
+pub mod container_org_image;
 pub mod distro_image;
 pub mod distrod_config;
 pub mod local_image;
-pub mod lxd_image;
 
 #[cfg(target_os = "linux")]
 pub mod command_alias;

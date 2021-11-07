@@ -14,12 +14,12 @@ use structopt::StructOpt;
 use xz2::read::XzDecoder;
 
 use libs::command_alias::CommandAlias;
+use libs::container_org_image::ContainerOrgImageList;
 use libs::distro::{self, DistroLauncher};
 use libs::distro_image::{
     self, download_file_with_progress, DistroImage, DistroImageFetcher, DistroImageFetcherGen,
     DistroImageFile,
 };
-use libs::lxd_image::LxdDistroImageList;
 use libs::passwd::{self, get_credential_from_passwd_file, Credential};
 use libs::wsl_interop;
 
@@ -233,11 +233,11 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
         None => {
             let local_image_fetcher =
                 || Ok(Box::new(LocalDistroImage::new(&prompt_path)) as Box<dyn DistroImageFetcher>);
-            let lxd_image_fetcher =
-                || Ok(Box::new(LxdDistroImageList::default()) as Box<dyn DistroImageFetcher>);
+            let container_org_image_fetcher =
+                || Ok(Box::new(ContainerOrgImageList::default()) as Box<dyn DistroImageFetcher>);
             let fetchers = vec![
                 Box::new(local_image_fetcher) as DistroImageFetcherGen,
-                Box::new(lxd_image_fetcher) as DistroImageFetcherGen,
+                Box::new(container_org_image_fetcher) as DistroImageFetcherGen,
             ];
             distro_image::fetch_image(fetchers, &choose_from_list, 1)
                 .await

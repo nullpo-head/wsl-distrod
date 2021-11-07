@@ -8,8 +8,8 @@ use chrono::NaiveDateTime;
 
 static LINUX_CONTAINERS_ORG_BASE: &str = "https://images.linuxcontainers.org/";
 
-pub async fn fetch_lxd_image(choose_from_list: ListChooseFn<'_>) -> Result<DistroImage> {
-    let mut distro_image_list = Box::new(LxdDistroImageList {}) as Box<dyn DistroImageFetcher>;
+pub async fn fetch_container_org_image(choose_from_list: ListChooseFn<'_>) -> Result<DistroImage> {
+    let mut distro_image_list = Box::new(ContainerOrgImageList {}) as Box<dyn DistroImageFetcher>;
     loop {
         let fetched_image_list = distro_image_list.fetch().await?;
         match fetched_image_list {
@@ -24,12 +24,12 @@ pub async fn fetch_lxd_image(choose_from_list: ListChooseFn<'_>) -> Result<Distr
 }
 
 #[derive(Default)]
-pub struct LxdDistroImageList;
+pub struct ContainerOrgImageList;
 
 #[async_trait]
-impl DistroImageFetcher for LxdDistroImageList {
+impl DistroImageFetcher for ContainerOrgImageList {
     fn get_name(&self) -> &str {
-        "Download a LXD image"
+        "Download an image from linxcontainers.org"
     }
 
     async fn fetch(&self) -> Result<DistroImageList> {
@@ -39,17 +39,19 @@ impl DistroImageFetcher for LxdDistroImageList {
                 links
                     .into_iter()
                     .map(|link| {
-                        Box::new(LxdDistroVersionList {
+                        Box::new(ContainerOrgDistroVersionList {
                             name: link.name,
                             version_list_url: format!("images/{}", link.url),
                         }) as Box<dyn DistroImageFetcher>
                     })
                     .collect()
             })
-            .with_context(|| "Failed to parse the distro image list of the LXD image server.")?;
+            .with_context(|| {
+                "Failed to parse the distro image list of the linuxcontainer.org image server."
+            })?;
 
         Ok(DistroImageList::Fetcher(
-            "a LXD image".to_owned(),
+            "a linuxcontainers.org image".to_owned(),
             distros,
             DefaultImageFetcher::Name("ubuntu".to_owned()),
         ))
@@ -57,13 +59,13 @@ impl DistroImageFetcher for LxdDistroImageList {
 }
 
 #[derive(Debug)]
-pub struct LxdDistroVersionList {
+pub struct ContainerOrgDistroVersionList {
     name: String,
     version_list_url: String,
 }
 
 #[async_trait]
-impl DistroImageFetcher for LxdDistroVersionList {
+impl DistroImageFetcher for ContainerOrgDistroVersionList {
     fn get_name(&self) -> &str {
         self.name.as_str()
     }
@@ -76,7 +78,7 @@ impl DistroImageFetcher for LxdDistroVersionList {
         let versions: Vec<_> = links
             .into_iter()
             .map(|link| {
-                Box::new(LxdDistroVersion {
+                Box::new(ContainerOrgDistroVersion {
                     distro_name: self.name.clone(),
                     version_name: link.name,
                     platform_list_url: format!("{}{}", self.version_list_url, link.url),
@@ -97,14 +99,14 @@ impl DistroImageFetcher for LxdDistroVersionList {
 }
 
 #[derive(Debug)]
-pub struct LxdDistroVersion {
+pub struct ContainerOrgDistroVersion {
     distro_name: String,
     version_name: String,
     platform_list_url: String,
 }
 
 #[async_trait]
-impl DistroImageFetcher for LxdDistroVersion {
+impl DistroImageFetcher for ContainerOrgDistroVersion {
     fn get_name(&self) -> &str {
         self.version_name.as_str()
     }
