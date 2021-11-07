@@ -247,6 +247,7 @@ fn gen_connection_check_shell_script(uri: &str) -> String {
         gen_connection_check_python_command(uri),
         gen_connection_check_perl_command(uri),
         gen_connection_check_apt_fallback(uri),
+        gen_connection_check_tracepath_command(uri),
         gen_connection_check_zypper_fallback(uri),
     ];
     for (command_name, whole_command) in commands.iter() {
@@ -258,6 +259,13 @@ fn gen_connection_check_shell_script(uri: &str) -> String {
     script.push_str("else\n echo no command available >&2; exit 1\n fi");
     eprintln!("{}", script);
     script
+}
+
+fn gen_connection_check_tracepath_command(uri: &str) -> (&'static str, String) {
+    (
+        "command -v tracepath",
+        format!(r"tracepath -4 -m 5 {}", uri),
+    )
 }
 
 fn gen_connection_check_curl_command(uri: &str) -> (&'static str, String) {
