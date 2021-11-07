@@ -12,14 +12,23 @@ use crate::{envfile::PathVariable, mount_info::get_mount_entries};
 pub fn get_wsl_drive_path(drive_letter: &str) -> Result<Option<PathBuf>> {
     let entries = get_mount_entries().with_context(|| "Failed to get the mount entries.")?;
     Ok(entries.into_iter().find_map(|e| {
-        if e.fstype == "9p"
-            && e.source
-                .starts_with(&format!("{}:\\", drive_letter.to_uppercase()))
-        {
-            Some(e.path)
-        } else {
-            None
+        if e.fstype != "9p" {
+            return None;
         }
+        // Windows 10
+        if e.source
+            .starts_with(&format!("{}:\\", drive_letter.to_uppercase()))
+        {
+            return Some(e.path);
+        }
+        // Windows 11
+        if e.source == "drvfs"
+            && e.attributes
+                .contains(&format!("path={}:\\", drive_letter.to_uppercase()))
+        {
+            return Some(e.path);
+        }
+        None
     }))
 }
 
