@@ -7,7 +7,11 @@ Wants=network-online.target systemd-networkd-wait-online.service
 Restart=on-failure
 RestartSec=15
 
+# WSL_INTEROP and other variables should be set by systemd even without sourcing /etc/environment,
+# but if a user enable this just after they updated systemd (apt-upgrade or pacman -Syu), then
+# systemd will forget those variables due to restart. So, source /etc/environment just in case.
 ExecStart=/bin/sh -c '/opt/distrod/bin/portproxy.exe proxy $(/opt/distrod/bin/portproxy show ipv4) -t $(cat /opt/distrod/conf/tcp4_ports)'
+EnvironmentFile=/etc/environment
 
 [Install]
 WantedBy=multi-user.target
