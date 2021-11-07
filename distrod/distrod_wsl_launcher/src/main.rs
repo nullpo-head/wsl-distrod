@@ -337,7 +337,7 @@ fn add_user(distro_name: &str, user_name: &str) -> Result<u32> {
     let mut user_add = wsl::WslCommand::new(Some("/bin/sh"), distro_name);
     user_add.arg("-c");
     user_add.arg(format!(
-            "useradd -m '{}' && while ! passwd {}; do : ; done && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
+            "useradd -m --shell /bin/bash '{}' && while ! passwd {}; do : ; done && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
             user_name, user_name, user_name
         ));
     let status = user_add

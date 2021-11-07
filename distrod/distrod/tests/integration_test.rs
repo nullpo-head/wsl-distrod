@@ -374,7 +374,15 @@ fn test_profile_initializes_additional_wsl_envs() {
     assert_eq!("DUMMY_DISTRO", output.trim());
 
     let mut create_user = DISTROD_SETUP.new_command();
-    create_user.args(&["exec", "--", "useradd", "-m", "test_user"]);
+    create_user.args(&[
+        "exec",
+        "--",
+        "useradd",
+        "-m",
+        "test_user",
+        "--shell",
+        "/bin/bash",
+    ]);
     let child = create_user.status().unwrap();
     assert!(child.success());
     let mut cat_profile = DISTROD_SETUP.new_command();
