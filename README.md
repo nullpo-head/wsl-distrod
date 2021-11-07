@@ -1,8 +1,8 @@
-# Distrod: a systemd-based meta-distro for WSL2
+# Distrod - WSL2 Distros with Systemd! 
 
 [![CI](https://github.com/nullpo-head/wsl-distrod/actions/workflows/ci.yaml/badge.svg)](https://github.com/nullpo-head/wsl-distrod/actions)
 
-Distrod is a meta-distro for WSL2 that allows you to install Ubuntu, Arch Linux, Gentoo and many other distros
+Distrod is a systemd-based meta-distro for WSL2 that allows you to install Ubuntu, Arch Linux, Gentoo and many other distros
 with systemd in a minute, or make your current distro run systemd.
 
 Distrod also provides built-in auto-start feature and port forwarding service.
