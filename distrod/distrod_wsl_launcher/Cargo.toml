@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 libs = { path = "../libs" }
-wslapi = "0.1"
 structopt = { version = "0.3" }
 log = "0.4"
 env_logger = "0.8"
@@ -25,3 +24,11 @@ tokio = { version = "1.10", features = ["rt", "rt-multi-thread", "macros"] }
 colored = "2"
 tempfile = "3"
 bytes = "1.0"
+regex = "1"
+
+[dependencies.windows]
+version = "0.25.0"
+features = [
+    "Win32_Foundation",
+	"Win32_System_SubsystemForLinux",
+]

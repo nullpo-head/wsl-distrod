@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use libs::cli_ui::{self, build_progress_bar};
@@ -9,7 +9,7 @@ use libs::distro_image::{
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
 use libs::lxd_image::LxdDistroImageList;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -17,8 +17,9 @@ use std::process::Command;
 use structopt::StructOpt;
 use tempfile::tempdir;
 use tempfile::TempDir;
-use wslapi::Library as WslApi;
 use xz2::read::XzDecoder;
+
+mod wsl;
 
 static DISTRO_NAME: &str = "Distrod";
 
@@ -68,8 +69,6 @@ fn main() {
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
     }
-    let mut s = String::new();
-    let _ = io::stdin().read_line(&mut s);
 }
 
 fn run(opts: Opts) -> Result<()> {
@@ -93,39 +92,32 @@ fn run(opts: Opts) -> Result<()> {
 }
 
 fn run_distro(distro_name: &str, opts: RunOpts) -> Result<()> {
-    let wsl = WslApi::new()
-        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
-
-    if !wsl.is_distribution_registered(distro_name) {
+    if !unsafe { wsl::is_distribution_registered(distro_name) } {
         let install_opts = InstallOpts { root: false };
         return install_distro(distro_name, install_opts);
     }
 
-    let command = construct_cmd_str(opts.cmd);
-    wsl.launch_interactive(distro_name, command, true)
-        .with_context(|| "Failed to execute command by launch interactive.")?;
+    let mut command = wsl::WslCommand::new(opts.cmd.get(0), distro_name);
+    if opts.cmd.len() > 1 {
+        command.args(&opts.cmd[1..]);
+    }
+    let _status = command
+        .status()
+        .with_context(|| format!("Failed to run {:?}", &opts))?;
     Ok(())
 }
 
-fn construct_cmd_str(cmd: Vec<String>) -> OsString {
-    OsString::from(
-        cmd.into_iter()
-            .map(|arg| arg.replace("\\", "\\\\").replace(" ", "\\ "))
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
-}
-
 fn config_distro(distro_name: &str, opts: ConfigOpts) -> Result<()> {
-    let wsl = WslApi::new()
-        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
-
     if let Some(ref default_user) = opts.default_user {
-        let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
-        let uid = query_uid(&wsl, distro_name, default_user.as_str(), tmp_dir)
-            .with_context(|| format!("Failed to get the uid of {}.", default_user))?;
-        wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
-            .with_context(|| "Failed to set the default user")?;
+        let uid = match default_user.parse::<u32>() {
+            Ok(uid) => uid,
+            _ => query_uid(distro_name, default_user.as_str())
+                .with_context(|| format!("Failed to get the uid of {}.", default_user))?,
+        };
+        unsafe {
+            wsl::set_distribution_default_user(distro_name, uid)
+                .with_context(|| "Failed to set the default user")?;
+        }
     }
     log::info!("Configuration done.");
 
@@ -134,9 +126,6 @@ fn config_distro(distro_name: &str, opts: ConfigOpts) -> Result<()> {
 
 #[tokio::main]
 async fn install_distro(distro_name: &str, opts: InstallOpts) -> Result<()> {
-    let wsl = WslApi::new()
-        .with_context(|| "Failed to retrieve WSL API. Have you enabled the WSL2 feature?")?;
-
     println!(
         r"
         ██████╗ ██╗███████╗████████╗██████╗  ██████╗ ██████╗ 
@@ -166,16 +155,17 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     let install_targz_path = merge_tar_archive(&tmp_dir, lxd_tar)?;
 
     log::info!("Now Windows is installing the new distribution. This may take a while...");
-    register_distribution(&wsl, distro_name, &install_targz_path)
+    register_distribution(distro_name, &install_targz_path)
         .with_context(|| "Failed to register the distribution.")?;
     log::info!("Done!");
 
     let uid = if !opts.root {
         let user_name = prompt_string("Please input the new Linux user name. This doesn't have to be the same as your Windows user name.", "user name", None)?;
-        let uid = add_user(&wsl, distro_name, &user_name, tmp_dir);
-        if uid.is_err() {
+        let uid = add_user(distro_name, &user_name);
+        if let Err(ref e) = uid {
             log::warn!(
-                "Adding a user failed, but you can try adding a new user as the root after installation."
+                "Adding a user failed, but you can try adding a new user as the root after installation. {:?}",
+                e
             );
         }
         uid.unwrap_or(0)
@@ -184,21 +174,35 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     };
 
     log::info!("Initializing the new Distrod distribution. This may take a while...");
-    wsl.launch_interactive(
-        distro_name,
-        format!("{} enable -d", distrod_config::get_distrod_bin_path()),
-        true,
-    )
-    .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
-    log::info!("Installation of Distrod is now complete.");
-    if uid != 0 {
-        // This should be done after enable, because this changes the default user from root.
-        wsl.configure_distribution(distro_name, uid, wslapi::WSL_DISTRIBUTION_FLAGS::DEFAULT)
-            .with_context(|| "Failed to configure the default uid of the distribution.")?;
+    let mut distrod_enable =
+        wsl::WslCommand::new(Some(distrod_config::get_distrod_bin_path()), distro_name);
+    distrod_enable.args(["enable", "-d"]);
+    let exit_code = distrod_enable
+        .status()
+        .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+    if exit_code != 0 {
+        bail!(
+            "Initialization command exited with error. error: {} cmd: {:?}",
+            exit_code,
+            &distrod_enable
+        );
     }
 
-    wsl.launch_interactive(distro_name, "", true)
+    if uid != 0 {
+        // This should be done after enable, because this changes the default user from root.
+        log::info!("Setting the default user to uid: {}", uid);
+        set_default_user(distro_name, uid).with_context(|| "Failed to set the default user")?;
+    }
+
+    log::info!("Installation of Distrod is now complete.");
+    let _ = wsl::WslCommand::new::<String, _>(None, distro_name)
+        .status()
         .with_context(|| "Failed to initialize the rootfs image inside WSL.")?;
+
+    log::info!("Hit enter to exit.");
+    let mut s = String::new();
+    let _ = io::stdin().read_line(&mut s);
+
     Ok(())
 }
 
@@ -273,21 +277,19 @@ where
         }
         let header = entry.header();
         builder
-            .append(&header, Cursor::new(data))
+            .append(header, Cursor::new(data))
             .with_context(|| format!("Failed to add an entry to an archive. {:?}", path))?;
     }
     Ok(())
 }
 
-fn register_distribution<P: AsRef<Path>>(
-    wsl: &wslapi::Library,
-    distro_name: &str,
-    tar_gz_filename: P,
-) -> Result<()> {
+fn register_distribution<P: AsRef<Path>>(distro_name: &str, tar_gz_filename: P) -> Result<()> {
     // Install the distro by WSL API only when this app is a Windows Store app and --distro-name is not given.
     if distro_name == DISTRO_NAME && is_windows_store_app() {
-        wsl.register_distribution(distro_name, tar_gz_filename)
-            .with_context(|| "Failed to register the distribution.")
+        unsafe {
+            wsl::register_distribution(distro_name, tar_gz_filename)
+                .with_context(|| "Failed to register the distribution.")
+        }
     } else {
         // Otherwise, use wsl.exe --import to install the distro for flexibility.
         let mut cmd = Command::new("cmd.exe");
@@ -331,48 +333,33 @@ fn is_windows_store_app() -> bool {
     inner().unwrap_or(false)
 }
 
-fn add_user(
-    wsl: &wslapi::Library,
-    distro_name: &str,
-    user_name: &str,
-    tmp_dir: TempDir,
-) -> Result<u32> {
-    wsl.launch_interactive(
-        distro_name,
-        format!(
+fn add_user(distro_name: &str, user_name: &str) -> Result<u32> {
+    let mut user_add = wsl::WslCommand::new(Some("/bin/sh"), distro_name);
+    user_add.arg("-c");
+    user_add.arg(format!(
             "useradd -m '{}' && while ! passwd {}; do : ; done && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
             user_name, user_name, user_name
-        ),
-        true,
-    )?;
+        ));
+    let status = user_add
+        .status()
+        .with_context(|| "Failed to invoke user_add")?;
+    if status != 0 {
+        bail!("user_add exited with error code {}", status);
+    }
     log::info!("Querying the generated uid. This may take some time depending on your machine.");
-    query_uid(wsl, distro_name, user_name, tmp_dir)
+    query_uid(distro_name, user_name)
 }
 
-fn query_uid(
-    wsl: &wslapi::Library,
-    distro_name: &str,
-    user_name: &str,
-    tmp_dir: TempDir,
-) -> Result<u32> {
-    let uid_path = tmp_dir.path().join("uid");
-    let uid_file = File::create(&uid_path).with_context(|| "Failed to create a temp file.")?;
-    let status = wsl
-        .launch(
-            distro_name,
-            format!("id -u {}", &user_name),
-            true,
-            wslapi::Stdio::null(),
-            uid_file,
-            wslapi::Stdio::null(),
-        )
-        .with_context(|| "Failed to launch id command.")?
-        .wait()?;
-    if !status.success() {
-        bail!("'id -u' failed.");
+fn query_uid(distro_name: &str, user_name: &str) -> Result<u32> {
+    let mut id = wsl::WslCommand::new(Some("id"), distro_name);
+    id.arg("-u");
+    id.arg(user_name);
+    let output = id.output().with_context(|| "Failed to spawn id command.")?;
+    if output.status != 0 {
+        bail!("'id -u' exited with error code. {}", output.status);
     }
-    let uid_string = std::fs::read_to_string(&uid_path)
-        .with_context(|| "Failed to read the contents of id file.")?;
+    let uid_string = String::from_utf8(output.stdout)
+        .with_context(|| "The output of id command is invalid utf-8.")?;
     let uid_u32 = uid_string.trim().parse::<u32>().with_context(|| {
         format!(
             "id command has written an unexpected data: '{}'",
@@ -380,4 +367,66 @@ fn query_uid(
         )
     })?;
     Ok(uid_u32)
+}
+
+fn set_default_user(distro_name: &str, uid: u32) -> Result<()> {
+    if is_windows10() {
+        log::debug!("Setting default user by the WSL API");
+        // This crases on Windows 11. See the else block.
+        unsafe {
+            wsl::set_distribution_default_user(distro_name, uid)
+                .with_context(|| "Failed to configure the default uid of the distribution.")?;
+        }
+    } else {
+        log::debug!("Setting default user by the workaround for Windows11");
+        // Assume it's Windows 11.
+        // On Windows 11, calling set_distribution_default_user after registering distribution crashes for some reason.
+        // However, as a workaround, executing it in another command works, though I don't know why :/
+        // Conversely, this method crases on Windows 10 for another strange reason :/ :/
+        let mut self_recurse = Command::new(
+            std::env::current_exe().with_context(|| "Failed to get the current exe.")?,
+        );
+        self_recurse.args(["config", "--default-user"]);
+        self_recurse.arg(uid.to_string());
+        let status = self_recurse
+            .status()
+            .with_context(|| "self-recursion failed.")?;
+        if !status.success() {
+            bail!("Setting the default user failed.");
+        }
+    }
+    Ok(())
+}
+
+fn is_windows10() -> bool {
+    get_windows10_build_number()
+        .map(|number| number < 22000)
+        .map_err(|e| {
+            log::debug!("Failed to get windows10 build number. {:?}", &e);
+            e
+        })
+        .unwrap_or(false)
+}
+
+fn get_windows10_build_number() -> Result<u32> {
+    let mut ver = Command::new("cmd");
+    ver.args(["/C", "ver"]);
+    let output = ver
+        .output()
+        .with_context(|| "Failed to get the output of `ver` command.")?
+        .stdout;
+    let version_string = String::from_utf8(output)
+        .with_context(|| "The output of `ver` command is not an UTF-8 string.")?;
+
+    let version_pattern =
+        regex::Regex::new(r"\[Version 10\.0\.([0-9]*)\.").expect("this pattern should be valid");
+    let captures = version_pattern
+        .captures(version_string.trim())
+        .ok_or_else(|| anyhow!("Unknown Windows version string pattern."))?;
+    captures
+        .get(1)
+        .ok_or_else(|| anyhow!("version was not found"))?
+        .as_str()
+        .parse::<u32>()
+        .with_context(|| "Failed to parse the version string as u32")
 }
