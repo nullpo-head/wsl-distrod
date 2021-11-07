@@ -264,7 +264,12 @@ fn gen_connection_check_shell_script(uri: &str) -> String {
 fn gen_connection_check_tracepath_command(uri: &str) -> (&'static str, String) {
     (
         "command -v tracepath",
-        format!(r"tracepath -4 -m 5 {}", uri),
+        format!(
+            r"tracepath -4 -m 10 {}",
+            uri.strip_prefix("http://")
+                .or_else(|| uri.strip_prefix("https://"))
+                .unwrap_or(uri)
+        ),
     )
 }
 
