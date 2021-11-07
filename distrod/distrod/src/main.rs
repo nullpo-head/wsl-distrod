@@ -210,7 +210,7 @@ fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
             &wsl_interop::get_distro_name().with_context(|| "Failed to get the distro name.")?,
         )
         .with_context(|| "Failed to enable the autostart on Windows boot.")?;
-        log::info!("Now Distrod has been launched on Windows boot.");
+        log::info!("Distrod will now start automatically on Windows startup.");
     }
     Ok(())
 }
