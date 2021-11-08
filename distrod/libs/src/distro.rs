@@ -216,6 +216,7 @@ fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> 
     for (key, value) in collect_safe_wsl_interop_envs()
         .with_context(|| "Failed to collect safe WSL interop envs")?
     {
+        log::debug!("WSL envs: {:?} = {:?}", &key, &value);
         distro_launcher.with_system_env(
             key.to_string_lossy().to_string(),
             value.to_string_lossy().to_string(),
