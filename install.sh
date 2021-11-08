@@ -95,6 +95,7 @@ while [ -n "$1" ]; do
         ;;
     install)
         COMMAND=install
+        shift
         ;;
     uninstall)
         COMMAND=uninstall
