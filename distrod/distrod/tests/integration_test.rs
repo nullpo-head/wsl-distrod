@@ -168,7 +168,7 @@ fn test_sudo_initializes_wsl_envs() {
 }
 
 #[test]
-fn test_global_ip_is_reachable() {
+fn test_network_global_ip_is_reachable() {
     // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(45));
 
@@ -187,7 +187,7 @@ fn test_global_ip_is_reachable() {
 }
 
 #[test]
-fn test_name_can_be_resolved() {
+fn test_network_name_can_be_resolved() {
     // Wait for a while because Systemd may break the network only after some delay.
     std::thread::sleep(Duration::from_secs(45));
 

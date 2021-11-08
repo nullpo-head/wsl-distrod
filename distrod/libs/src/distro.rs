@@ -651,9 +651,16 @@ fn disable_incompatible_systemd_services(rootfs: &HostPath) {
         "dhcpcd.service",
         "NetworkManager.service",
         "multipathd.service",
+        "systemd-networkd.service",
+        "systemd-resolved.service",
+        "networking.service",
     ];
     for unit in &to_be_disabled {
-        if let Err(err) = SystemdUnitDisabler::new(&rootfs.as_path(), unit).disable() {
+        let disabler = SystemdUnitDisabler::new(&rootfs.as_path(), unit);
+        if matches!(disabler.is_masked(), Ok(true)) {
+            continue;
+        }
+        if let Err(err) = disabler.disable() {
             log::warn!("Faled to disable {}. Error: {:?}", unit, err);
         }
     }

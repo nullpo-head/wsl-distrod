@@ -19,7 +19,7 @@ impl SystemdUnitDisabler {
 
     pub fn disable(&self) -> Result<()> {
         if self.is_masked()? {
-            bail!("{} is masked.", self.name);
+            bail!("{} is already masked.", self.name);
         }
         let company_units = self.get_company_units()?;
         self.remove_unit_symlinks()?;
