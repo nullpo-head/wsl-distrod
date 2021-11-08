@@ -75,7 +75,10 @@ Feature under development
 
 #### See also
 
+- [Launch WSL 2 on Windows Startup](docs/references.md#launch-wsl-2-on-windows-startup)
+- [Forward Ports to outside of Windows](docs/references.md#forward-ports-to-outside-of-windows)
 - [Troubleshoot WSL Network Down](docs/references.md#troubleshoot-wsl-network-down)
+- [Install and Run Multiple Distros at the same time](docs/references.md#install-and-run-multiple-distros-at-the-same-time)
 
 ### Option 2: Make your Current Distro Run Systemd
 
@@ -118,12 +121,12 @@ By this installation, systemd is enabled in your WSL 2 distro.
 
    After re-opening a new WSL window, your shell runs in a systemd session.
 
-### See also
+#### See also
 
 - [Launch WSL 2 on Windows Startup](docs/references.md#launch-wsl-2-on-windows-startup)
 - [Forward Ports to outside of Windows](docs/references.md#forward-ports-to-outside-of-windows)
 - [Troubleshoot WSL Network Down](docs/references.md#troubleshoot-wsl-network-down)
-- [Install and Run Multiple Distros at the same time](docs/references.md#install-and-run-multiple-distros-at-the-same-time)
+- [Open a Shell Session outside the Container for Systemd](docs/references.md#open-a-shell-session-outside-the-container-for-systemd)
 - [Disable Systemd / Distrod](docs/references.md#disable-systemd--distrod)
 
 ## Usage
@@ -154,7 +157,17 @@ and starts your WSL sessions within that container. To realize that, Distrod doe
   2.  Launches your actual shell within that container
   3.  Bridges between the systemd sessions and the WSL interop environment.
 
+## Other Notes
+
+1. Does WSLg works on Distrod?
+
+   Yes! Distrod doesn't prevent anything about WSLg. Distrod sets up sockets for X11 and environment variables properly.
+
+   However, WSLg itself has some quirks even on non-Distrod WSL2 distros. Try many things until a GUI app runs.
+   For example, to run `xeyes` without failure, I had to run it three times on the non-Distrod official Ubuntu 20.04.
+
 ### See also
 
+- [References.md](docs/references.md)
 - [Open a Shell Session outside the Container for Systemd](docs/references.md#open-a-shell-session-outside-the-container-for-systemd)
 - [Disable Systemd / Distrod](docs/references.md#disable-systemd--distrod)
