@@ -1,4 +1,4 @@
-# Distrod - WSL2 Distros with Systemd! 
+# Distrod - WSL2 Distros with Systemd!
 
 [![CI](https://github.com/nullpo-head/wsl-distrod/actions/workflows/ci.yaml/badge.svg)](https://github.com/nullpo-head/wsl-distrod/actions)
 
@@ -57,16 +57,6 @@ Feature under development
 
 2. Follow the wizard to install a new distro.
 
-3. Restart Distrod once to get it effective. (Workaround for missing necessary network initialization. Will be fixed soon)
-
-   After closing the window,
-  
-   ```bat
-   > wsl --terminate Distrod
-   ```
-   
-   And, open `Distrod` tab in Windows Terminal, or re-launch `distrod_wsl_launcher.exe`
-
 3. \[Optional\] To make your distro start on Windows startup, run the following command.
 
    ```bash
@@ -82,6 +72,10 @@ Feature under development
    ```
 
    For more detailed instruction, see [Forward Ports to outside of Windows](docs/references.md#forward-ports-to-outside-of-windows).
+
+#### See also
+
+- [Troubleshoot WSL Network Down](docs/references.md#troubleshoot-wsl-network-down)
 
 ### Option 2: Make your Current Distro Run Systemd
 
@@ -128,6 +122,7 @@ By this installation, systemd is enabled in your WSL 2 distro.
 
 - [Launch WSL 2 on Windows Startup](docs/references.md#launch-wsl-2-on-windows-startup)
 - [Forward Ports to outside of Windows](docs/references.md#forward-ports-to-outside-of-windows)
+- [Troubleshoot WSL Network Down](docs/references.md#troubleshoot-wsl-network-down)
 - [Install and Run Multiple Distros at the same time](docs/references.md#install-and-run-multiple-distros-at-the-same-time)
 - [Disable Systemd / Distrod](docs/references.md#disable-systemd--distrod)
 

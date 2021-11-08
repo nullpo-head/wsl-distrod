@@ -1,5 +1,95 @@
 # References
 
+## Troubleshoot WSL Network Down
+
+Distrod should modify systemd-based systems so that it doesn't break the WSL network,
+but possibly you may encounter the situation where Distrod cannot connect to the Internet,
+or perhaps your entire WSL network go down.
+Don't be panicked. It can be fixed easily :)
+
+### Why did the entire WSL network go down, not just Distrod's?
+
+Sometimes your entire WSL network may go down, not just Distrod's.
+This is because in WSL2, all distros share the same network interfaces.
+Actually, each distro of WSL2 is not running on an isolated VM, but on a container that WSL's `/init` creates.
+And they share the same network namespaces, thus the entire network is down if some distro breaks its network.
+
+### Solution 1: Use Tested Distro with Distrod
+
+1. Fix the network first.
+
+   Broken network affects other distros as well, so let's anyway fix it first.
+   Just restarting your WSL2 solves the problem.
+
+   Run
+
+   ```console
+   > wsl --shutdown
+   ```
+
+   and restart it by starting your NON-Distrod distro. If you start Distrod, it will break the network again.
+
+2. Un-install Distrod
+
+   ```console
+   > wsl --unregister Distrod
+   ```
+
+3. Install a distro which [README.md](../README.md) says is continuously tested.
+
+   Follow the instruction on README.md. The tested distros will not break the network.
+
+### Solution 2: Debug What Systemd Service is Breaking your Network
+
+If you're familiar with Linux system and Systemd, you will be able to find which systemd service is
+breaking the WSL network, and disable it by `# systemctl disable SERVICE_NAME`.
+
+1. Find the service which broke the network.
+
+   Basically, when a WSL2 distro starts,
+   WSL will initialize `eth0` and assign an IP address and the default gateway to it.
+   Then, WSL also updates `/etc/resolv.conf` with its own DNS server.
+   On the other hand, WSL doesn't provide any DHCP server.
+
+   So, maybe some systemd unit broke
+
+   1. `eth0`'s IP / the default gateway by DHCP or
+   2. `/etc/resolv.conf`
+
+   Find that from the log from `journalctl`
+
+   ```bash
+   sudo journalctl -b
+   ```
+
+2. Disable the service
+
+   ```bash
+   sudo systemctl disable SERVICE
+   ```
+
+3. Restart WSL
+
+   ```console
+   > wsl --shutdown
+   ```
+
+4. Report the issue to Distrod! :)
+
+### Solution 3: Disable Distrod
+
+1. Disable Distrod
+
+   See [Disable Systemd / Distrod](#disable-systemd--distrod)
+
+2. Restart WSL
+
+   ```console
+   > wsl --shutdown
+   ```
+
+Even after disabling Distrod, you can continue to use your distro as a regular WSL2 distro.
+
 ## Launch WSL 2 on Windows Startup
 
 Please run `enable` command with `--start-on-windows-boot` option.
@@ -16,7 +106,7 @@ the registered Windows task will run without Windows admin privilege.
 Distrod will start automatically when Windows starts, regardless of whether you are logged in or not.
 
 **NOTE**: Distrod runs on Windows startup with a 30 second delay.
-You can check if the auto-start suceeded by Windows's Task Scheduler.
+You can check if the auto-start succeeded by Windows' Task Scheduler.
 
 See also:
 
