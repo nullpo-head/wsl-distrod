@@ -87,7 +87,7 @@ impl DistroImageFetcher for ContainerOrgDistroVersionList {
             .collect();
         let default = match self.get_name() {
             "ubuntu" => DefaultImageFetcher::Name("focal".to_owned()),
-            "debian" => DefaultImageFetcher::Name("buster".to_owned()),
+            "debian" => DefaultImageFetcher::Name("bullseye".to_owned()),
             _ => DefaultImageFetcher::Index(versions.len() - 1),
         };
         Ok(DistroImageList::Fetcher(
