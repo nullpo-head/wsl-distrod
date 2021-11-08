@@ -98,6 +98,7 @@ By this installation, systemd is enabled in your WSL 2 distro.
 
    ```bash
    curl -L -O "https://raw.githubusercontent.com/nullpo-head/wsl-distrod/main/install.sh"
+   chmod +x install.sh
    sudo ./install.sh install
    ```
 
@@ -151,6 +152,16 @@ For reference, the following command launches a distro by name in WSL
 ```console
 > wsl --distribution Distrod
 ```
+
+## Update Distrod
+
+1. Inside a Distrod session, download and run the latest installer script.
+
+   ```bash
+   curl -L -O "https://raw.githubusercontent.com/nullpo-head/wsl-distrod/main/install.sh"
+   chmod +x install.sh
+   sudo ./install.sh update
+   ```
 
 ## How Distrod Works
 
