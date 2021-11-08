@@ -125,6 +125,8 @@ and there was no easy solution to this problem.
 Distrod provides a very simple port-forwarding solution, using systemd.
 Distrod has the built-in `portproxy.service`. Enable it by `systemctl`.
 
+**NOTE**: On Windows 11, exe files on WSL FS doesn't work on Windows startup. See [Known bus](#known-bugs).
+
 1. Configure the port numbers to forward
 
    Write the port numbers in `/opt/distrod/conf/tcp4_ports`, separated by spaces.
@@ -256,3 +258,9 @@ If your system is not running systemd for some reason, then you can check the lo
 ```bash
 sudo grep 'Distrod:' /dev/kmsg
 ```
+
+## Know Bugs
+
+- Starting the port forwarding service on Windows startup doesn't work on Windows 11,
+  because Windows 11 has a bug that it cannot run exe files on WSL's FS on Windows startup.
+  Workaround will be implemented soon.

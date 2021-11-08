@@ -74,6 +74,8 @@ Feature under development
    You also might want to forward ports of services such as `ssh` to the outside of Windows.
    In that case, you can enable the built-in port proxy service provided by Distrod.
 
+   **NOTE**: On Windows 11, exe files on WSL FS doesn't work on Windows startup. See [Known bus](docs/references.md#known-bugs).
+
    ```bash
    echo 22 | sudo tee /opt/distrod/conf/tcp4_ports  # update the portproxy.service's configuration
    sudo systemctl enable --now portproxy.service  # enable and start it
