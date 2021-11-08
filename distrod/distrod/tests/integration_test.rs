@@ -170,7 +170,7 @@ fn test_sudo_initializes_wsl_envs() {
 #[test]
 fn test_global_ip_is_reachable() {
     // Wait for a while because Systemd may break the network only after some delay.
-    std::thread::sleep(Duration::from_secs(15));
+    std::thread::sleep(Duration::from_secs(45));
 
     // Output debug information for the case that the test fails.
     show_debug_ip_info();
@@ -189,7 +189,7 @@ fn test_global_ip_is_reachable() {
 #[test]
 fn test_name_can_be_resolved() {
     // Wait for a while because Systemd may break the network only after some delay.
-    std::thread::sleep(Duration::from_secs(15));
+    std::thread::sleep(Duration::from_secs(45));
 
     // Output debug information for the case that the test fails.
     show_debug_ip_info();
