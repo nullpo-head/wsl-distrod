@@ -57,15 +57,7 @@ Feature under development
 
 2. Follow the wizard to install a new distro.
 
-3. Restart Distrod once to get it effective. (Workaround for missing necessary network initialization. Will be fixed soon)
-
-   After closing the window,
-
-   ```bat
-   > wsl --terminate Distrod
-   ```
-
-4. \[Optional\] To make your distro start on Windows startup, run the following command.
+3. \[Optional\] To make your distro start on Windows startup, run the following command.
 
    ```bash
    sudo /opt/distrod/bin/distrod enable --start-on-windows-boot
@@ -74,7 +66,7 @@ Feature under development
    You also might want to forward ports of services such as `ssh` to the outside of Windows.
    In that case, you can enable the built-in port proxy service provided by Distrod.
 
-   **NOTE**: On Windows 11, exe files on WSL FS doesn't work on Windows startup. See [Known bus](docs/references.md#known-bugs).
+   **NOTE**: On Windows 11, `portproxy.service` doesn't work on Windows startup, which should be fixed soon. See [Known bus](docs/references.md#know-bugs).
 
    ```bash
    echo 22 | sudo tee /opt/distrod/conf/tcp4_ports  # update the portproxy.service's configuration
