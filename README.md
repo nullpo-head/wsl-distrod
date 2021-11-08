@@ -57,6 +57,16 @@ Feature under development
 
 2. Follow the wizard to install a new distro.
 
+3. Restart Distrod once to get it effective. (Workaround for missing necessary network initialization. Will be fixed soon)
+
+   After closing the window,
+  
+   ```bat
+   > wsl --terminate Distrod
+   ```
+   
+   And, open `Distrod` tab in Windows Terminal, or re-launch `distrod_wsl_launcher.exe`
+
 3. \[Optional\] To make your distro start on Windows startup, run the following command.
 
    ```bash
