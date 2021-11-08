@@ -9,7 +9,8 @@ use libs::distro_image::{
 };
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
-use std::ffi::OsStr;
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -246,29 +247,49 @@ fn merge_tar_archive<R: Read>(work_dir: &TempDir, mut rootfs: tar::Archive<R>) -
     let encoder = GzEncoder::new(install_targz, flate2::Compression::default());
 
     let mut builder = tar::Builder::new(encoder);
-    append_tar_archive(&mut builder, &mut rootfs)
+    append_tar_archive(&mut builder, &mut rootfs, vec!["/etc/resolv.conf"])
         .with_context(|| "Failed to merge the given image.")?;
-    append_tar_archive(&mut builder, &mut distrod_tar)
+    append_tar_archive::<_, _, _, &str>(&mut builder, &mut distrod_tar, vec![])
         .with_context(|| "Failed to merge the given image.")?;
     builder.finish()?;
     drop(builder); // So that we can close the install_targz file.
     Ok(install_targz_path)
 }
 
-fn append_tar_archive<W, R>(
+fn append_tar_archive<W, R, I, P>(
     builder: &mut tar::Builder<W>,
     archive: &mut tar::Archive<R>,
+    exclusion: I,
 ) -> Result<()>
 where
     W: std::io::Write,
     R: std::io::Read,
+    I: IntoIterator<Item = P>,
+    P: AsRef<OsStr>,
 {
+    let mut exclusion_set: HashSet<OsString> = HashSet::new();
+    for path in exclusion {
+        let path = path.as_ref();
+        exclusion_set.insert(path.to_os_string());
+        // There are several ways to represent an absolute path.
+        let path = Path::new(path);
+        if let Ok(alt_path_rel) = path.strip_prefix("/") {
+            exclusion_set.insert(alt_path_rel.as_os_str().to_owned());
+            let mut alt_path_dot = OsString::from(".");
+            alt_path_dot.push(path);
+            exclusion_set.insert(alt_path_dot.to_os_string());
+        }
+    }
+
     for entry in archive
         .entries()
         .with_context(|| "Failed to read the entries of the archive.")?
     {
         let mut entry = entry?;
         let path = entry.path()?.as_os_str().to_owned();
+        if exclusion_set.contains(&path) {
+            continue;
+        }
         let mut data = vec![];
         {
             entry

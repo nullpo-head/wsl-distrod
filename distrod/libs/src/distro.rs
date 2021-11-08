@@ -609,15 +609,30 @@ fn disable_incompatible_systemd_network_configuration(
             )
         })?;
     }
-    // Remove /etc/resolv.conf so that systemd knows it shouldn't touch resolv.conf
+    // Remove the link from /etc/resolv.conf to systemd
     if overwrites_potential_userfiles {
-        let resolv_conf_path = &ContainerPath::new("/etc/resolv.conf")?.to_host_path(rootfs);
-        fs::remove_file(&resolv_conf_path)
-            .with_context(|| format!("Failed to remove '{:?}'.", &resolv_conf_path))?;
-        // Touch /etc/resolv.conf so that WSL over-writes it or we can do bind-mount on it
-        File::create(&resolv_conf_path)
-            .with_context(|| format!("Failed to touch '{:?}'", &resolv_conf_path))?;
+        remove_systemd_resolv_conf(rootfs)
+            .with_context(|| "Failed to remove systemd's resolv.conf")?;
     }
+    Ok(())
+}
+
+fn remove_systemd_resolv_conf(rootfs: &HostPath) -> Result<()> {
+    let resolv_conf_path = ContainerPath::new("/etc/resolv.conf")?.to_host_path(rootfs);
+    let metadata = fs::symlink_metadata(&resolv_conf_path)
+        .with_context(|| format!("Failed to get the symlink_metadata {:?}", &resolv_conf_path))?;
+    if !metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let link_to = std::fs::read_link(&resolv_conf_path)
+        .with_context(|| format!("Failed to read link {:?}", &resolv_conf_path))?;
+    if link_to.components().any(|name| matches!(name, std::path::Component::Normal(path) if path.to_str() == Some("systemd"))) {
+            fs::remove_file(&resolv_conf_path)
+                .with_context(|| format!("Failed to remove '{:?}'.", &resolv_conf_path))?;
+            // Touch /etc/resolv.conf so that WSL over-writes it or we can do bind-mount on it
+            File::create(&resolv_conf_path)
+                .with_context(|| format!("Failed to touch '{:?}'", &resolv_conf_path))?;
+        }
     Ok(())
 }
 
