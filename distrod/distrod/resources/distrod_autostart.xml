@@ -57,6 +57,8 @@ public static extern uint WslLaunchInteractive(
 
 $wslapi = Add-Type -MemberDefinition $WslLaunchInteractive -Name 'WslApi' -Namespace 'Win32' -PassThru;
 $exitcode=256;
+$Env:DISTROD_EXEC_INIT_LAUNCH_DELAY = \"20\";
+$Env:WSLENV += \":DISTROD_EXEC_INIT_LAUNCH_DELAY\";
 $wslapi::WslLaunchInteractive('{{DISTRO_NAME}}', 'exit', $false, [ref]$exitcode);
 } while($false)
 "

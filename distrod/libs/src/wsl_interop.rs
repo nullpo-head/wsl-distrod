@@ -61,6 +61,16 @@ pub fn collect_wsl_env_vars() -> Result<HashMap<OsString, OsString>> {
     wsl_env_names.insert(OsString::from("WSL_DISTRO_NAME"));
     wsl_env_names.insert(OsString::from("WSL_INTEROP"));
 
+    // Try to get them from the current process first.
+    // Note that the environment variables may be modified internally, which we should collect.
+    let wsl_envs: HashMap<_, _> = wsl_env_names
+        .iter()
+        .flat_map(|var| std::env::var_os(var).map(|val| (var.clone(), val)))
+        .collect();
+    if !wsl_envs.is_empty() {
+        return Ok(wsl_envs);
+    }
+
     // The WSL env vars may not be set if the process is launched by sudo.
     // Traverse the parent process until we find the WSL env vars in that case.
     let mut proc = process::Process::myself()

@@ -132,6 +132,9 @@ where
 }
 
 fn launch_distro() -> Result<Distro> {
+    delay_init_launch();
+    log::debug!("starting /init from distrod-exec");
+
     let mut distro_launcher =
         DistroLauncher::new().with_context(|| "Failed to init a DistroLauncher")?;
     distro_launcher
@@ -141,4 +144,48 @@ fn launch_distro() -> Result<Distro> {
         .launch()
         .with_context(|| "Failed to launch the distro.")?;
     Ok(distro)
+}
+
+static DISTROD_EXEC_DELAY_ENV_NAME: &str = "DISTROD_EXEC_INIT_LAUNCH_DELAY";
+
+/// On some distros, starting Systemd during WSL's /init being initialized on Windows startup
+/// makes /init crash. So launch Systemd after some delay.
+fn delay_init_launch() {
+    let delay_sec_str = match std::env::var(DISTROD_EXEC_DELAY_ENV_NAME) {
+        Ok(delay_sec_str) => delay_sec_str,
+        _ => return,
+    };
+    let delay_sec: u32 = match delay_sec_str.parse() {
+        Ok(delay_sec) => delay_sec,
+        Err(e) => {
+            log::warn!(
+                "[BUG] Invalid {} was given: {:?}. {:?}",
+                DISTROD_EXEC_DELAY_ENV_NAME,
+                delay_sec_str,
+                e
+            );
+            return;
+        }
+    };
+
+    log::debug!(
+        "Delaying launching init by {}sec. {:?}",
+        delay_sec,
+        std::time::Instant::now()
+    );
+    std::thread::sleep(std::time::Duration::from_secs(delay_sec as u64));
+
+    strip_wslenv_for_distod_exec_delay();
+    log::debug!("delay finished {:?}", std::time::Instant::now());
+}
+
+fn strip_wslenv_for_distod_exec_delay() {
+    let inner = || -> Result<()> {
+        let wslenv = std::env::var("WSLENV")?;
+        if let Some(stripped) = wslenv.strip_suffix(&format!(":{}", DISTROD_EXEC_DELAY_ENV_NAME)) {
+            std::env::set_var("WSLENV", stripped);
+        }
+        Ok(())
+    };
+    let _ = inner();
 }
