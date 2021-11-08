@@ -69,6 +69,7 @@ fn main() {
 
     if let Err(err) = run(opts) {
         log::error!("{:?}", err);
+        std::process::exit(1);
     }
 }
 
@@ -192,7 +193,13 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     if uid != 0 {
         // This should be done after enable, because this changes the default user from root.
         log::info!("Setting the default user to uid: {}", uid);
-        set_default_user(distro_name, uid).with_context(|| "Failed to set the default user")?;
+        if let Err(e) =
+            set_default_user(distro_name, uid).with_context(|| "Failed to set the default user")
+        {
+            log::warn!("{:?}", e);
+            log::info!("Don't be panicked :) Windows seems to have a bug that configuring default user via Windows API sometimes fails.");
+            log::info!("You can configure the default user later by `distrod_wsl_launcher config --default-user USER_NAME`");
+        }
     }
 
     log::info!("Installation of Distrod is now complete.");
@@ -407,6 +414,8 @@ fn set_default_user(distro_name: &str, uid: u32) -> Result<()> {
         let mut self_recurse = Command::new(
             std::env::current_exe().with_context(|| "Failed to get the current exe.")?,
         );
+        self_recurse.arg("-d");
+        self_recurse.arg(distro_name);
         self_recurse.args(["config", "--default-user"]);
         self_recurse.arg(uid.to_string());
         let status = self_recurse
