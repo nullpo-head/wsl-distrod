@@ -1,6 +1,6 @@
 While ($true) {
     Start-Process C:\Windows\System32\schtasks.exe "/create /ru {{USER_NAME}} /tn {{TASK_NAME}} /xml {{TASK_FILE_WINDOWS_PATH}}" -Verb runas -Wait
-    If ([bool](schtasks /query /fo list | Select-String -pattern "TaskName:\s+\\{{TASK_NAME}}" -quiet)) {
+    If ([bool](schtasks /query /fo list | Select-String -pattern "\s\\{{TASK_NAME}}" -quiet)) {
         echo "Enabling autostart has succeeded."
         break
     }
