@@ -9,8 +9,7 @@ use libs::distro_image::{
 };
 use libs::distrod_config;
 use libs::local_image::LocalDistroImage;
-use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -20,6 +19,7 @@ use tempfile::tempdir;
 use tempfile::TempDir;
 use xz2::read::XzDecoder;
 
+mod tar_helper;
 mod wsl;
 
 static DISTRO_NAME: &str = "Distrod";
@@ -155,6 +155,18 @@ You can install a local .tar.xz, or download an image from linuxcontainers.org.
     );
     let tmp_dir = tempdir().with_context(|| "Failed to create a tempdir")?;
     let install_targz_path = merge_tar_archive(&tmp_dir, container_org_tar)?;
+    if let Ok(rootfs_save_path) = std::env::var("SAVE_ROOTFS") {
+        log::info!(
+            "Copying the rootfs to the specified path. {:?}",
+            &rootfs_save_path
+        );
+        std::fs::copy(&install_targz_path, &rootfs_save_path).with_context(|| {
+            format!(
+                "Failed to copy the rootfs file to the specified path {:?}",
+                &rootfs_save_path
+            )
+        })?;
+    }
 
     log::info!("Now Windows is installing the new distribution. This may take a while...");
     register_distribution(distro_name, &install_targz_path)
@@ -254,61 +266,17 @@ fn merge_tar_archive<R: Read>(work_dir: &TempDir, mut rootfs: tar::Archive<R>) -
     let encoder = GzEncoder::new(install_targz, flate2::Compression::default());
 
     let mut builder = tar::Builder::new(encoder);
-    append_tar_archive(&mut builder, &mut rootfs, vec!["/etc/resolv.conf"])
-        .with_context(|| "Failed to merge the given image.")?;
-    append_tar_archive::<_, _, _, &str>(&mut builder, &mut distrod_tar, vec![])
+    tar_helper::append_tar_archive::<_, _, _, &str>(
+        &mut builder,
+        &mut rootfs,
+        vec!["/etc/resolv.conf"],
+    )
+    .with_context(|| "Failed to merge the given image.")?;
+    tar_helper::append_tar_archive::<_, _, _, &str>(&mut builder, &mut distrod_tar, vec![])
         .with_context(|| "Failed to merge the given image.")?;
     builder.finish()?;
     drop(builder); // So that we can close the install_targz file.
     Ok(install_targz_path)
-}
-
-fn append_tar_archive<W, R, I, P>(
-    builder: &mut tar::Builder<W>,
-    archive: &mut tar::Archive<R>,
-    exclusion: I,
-) -> Result<()>
-where
-    W: std::io::Write,
-    R: std::io::Read,
-    I: IntoIterator<Item = P>,
-    P: AsRef<OsStr>,
-{
-    let mut exclusion_set: HashSet<OsString> = HashSet::new();
-    for path in exclusion {
-        let path = path.as_ref();
-        exclusion_set.insert(path.to_os_string());
-        // There are several ways to represent an absolute path.
-        let path = Path::new(path);
-        if let Ok(alt_path_rel) = path.strip_prefix("/") {
-            exclusion_set.insert(alt_path_rel.as_os_str().to_owned());
-            let mut alt_path_dot = OsString::from(".");
-            alt_path_dot.push(path);
-            exclusion_set.insert(alt_path_dot.to_os_string());
-        }
-    }
-
-    for entry in archive
-        .entries()
-        .with_context(|| "Failed to read the entries of the archive.")?
-    {
-        let mut entry = entry?;
-        let path = entry.path()?.as_os_str().to_owned();
-        if exclusion_set.contains(&path) {
-            continue;
-        }
-        let mut data = vec![];
-        {
-            entry
-                .read_to_end(&mut data)
-                .with_context(|| format!("Failed to read the data of an entry: {:?}.", &path))?;
-        }
-        let header = entry.header();
-        builder
-            .append(header, Cursor::new(data))
-            .with_context(|| format!("Failed to add an entry to an archive. {:?}", path))?;
-    }
-    Ok(())
 }
 
 fn register_distribution<P: AsRef<Path>>(distro_name: &str, tar_gz_filename: P) -> Result<()> {
@@ -365,14 +333,27 @@ fn add_user(distro_name: &str, user_name: &str) -> Result<u32> {
     let mut user_add = wsl::WslCommand::new(Some("/bin/sh"), distro_name);
     user_add.arg("-c");
     user_add.arg(format!(
-            "useradd -m --shell /bin/bash '{}' && while ! passwd {}; do : ; done && echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
-            user_name, user_name, user_name
-        ));
+        "if ! command -v useradd > /dev/null; then \
+             echo Error: no 'useradd' command found. exiting.; \
+             exit 1; \
+         fi; \
+         useradd -m --shell /bin/bash '{}' && \
+         if ! command -v passwd > /dev/null; then \
+             echo  no 'passwd' command found. exiting.; \
+             exit 1; \
+         fi; \
+         while ! passwd {}; do : ; done && \
+         echo '{} ALL=(ALL:ALL) ALL' >> /etc/sudoers",
+        user_name, user_name, user_name
+    ));
     let status = user_add
         .status()
         .with_context(|| "Failed to invoke user_add")?;
     if status != 0 {
-        bail!("user_add exited with error code {}", status);
+        bail!(
+            "The commands to add a user exited with error code {}",
+            status
+        );
     }
     log::info!("Querying the generated uid. This may take some time depending on your machine.");
     query_uid(distro_name, user_name)

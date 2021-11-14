@@ -14,7 +14,7 @@ env_logger = "0.8"
 strum = { version = "0.20", features = ["derive"] }
 anyhow = "1.0"
 xz2 = "0.1"
-tar = "0.4"
+tar = { git = "https://github.com/nullpo-head/tar-rs", branch = "append_link" }
 flate2 = "1.0"
 indicatif = "0.16"
 chrono = "0.4"

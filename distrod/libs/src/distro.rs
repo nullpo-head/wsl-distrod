@@ -655,6 +655,8 @@ fn disable_incompatible_systemd_services(rootfs: &HostPath) {
         "systemd-networkd.service",
         "systemd-resolved.service",
         "networking.service",
+        "fwupd-refresh.service",
+        "fwupd-refresh.timer",
     ];
     for unit in &to_be_disabled {
         let disabler = SystemdUnitDisabler::new(&rootfs.as_path(), unit);

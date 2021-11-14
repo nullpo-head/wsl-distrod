@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "distrod"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -252,7 +252,7 @@ dependencies = [
  "serde",
  "serde_json",
  "structopt 0.3.22 (registry+https://github.com/rust-lang/crates.io-index)",
- "tar",
+ "tar 0.4.37 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
  "tokio",
  "xz2",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "distrod-exec"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "distrod_wsl_launcher"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -288,7 +288,7 @@ dependencies = [
  "scraper",
  "structopt 0.3.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "strum",
- "tar",
+ "tar 0.4.37 (git+https://github.com/nullpo-head/tar-rs?branch=append_link)",
  "tempfile",
  "tokio",
  "windows",
@@ -760,7 +760,7 @@ dependencies = [
  "serde_json",
  "strum",
  "systemd-parser",
- "tar",
+ "tar 0.4.37 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
  "toml",
  "tracing",
@@ -1729,6 +1729,16 @@ name = "tar"
 version = "0.4.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f5515d3add52e0bbdcad7b83c388bb36ba7b754dda3b5f5bc2d38640cdba5c"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.37"
+source = "git+https://github.com/nullpo-head/tar-rs?branch=append_link#eacd0c909930685370fa8fd53bec7d16313b1274"
 dependencies = [
  "filetime",
  "libc",
