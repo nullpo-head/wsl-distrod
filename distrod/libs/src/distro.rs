@@ -460,7 +460,15 @@ fn make_host_mountpoints_shared() -> Result<()> {
         Some(Path::new("/tmp")),
         Path::new("/tmp"),
         None,
-        nix::mount::MsFlags::MS_SHARED | nix::mount::MsFlags::MS_BIND,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+    )
+    .with_context(|| "Failed to bind the /tmp mountpoint")?;
+    nix::mount::mount::<Path, _, OsStr, OsStr>(
+        Some(Path::new("/tmp")),
+        Path::new("/tmp"),
+        None,
+        nix::mount::MsFlags::MS_SHARED,
         None,
     )
     .with_context(|| "Failed to make the /tmp mountpoint shared.")?;
