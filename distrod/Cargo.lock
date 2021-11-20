@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "distrod"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "distrod-exec"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "distrod_wsl_launcher"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "bytes",
