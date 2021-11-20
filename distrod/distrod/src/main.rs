@@ -140,6 +140,7 @@ fn is_executed_as_alias() -> bool {
 }
 
 fn run_as_command_alias() -> Result<()> {
+    log::debug!("running as command alias");
     if !is_executed_as_alias() {
         bail!("Distrod is not run as an alias, but `run_as_command_alias` is called.");
     }

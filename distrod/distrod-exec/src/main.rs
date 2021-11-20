@@ -76,6 +76,7 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
+    log::debug!("distrod-exec: exec_command");
     let cred = get_real_credential().with_context(|| "Failed to get the real credential.")?;
     cred.drop_privilege();
 
@@ -100,6 +101,7 @@ where
     S1: AsRef<OsStr>,
     S2: AsRef<OsStr>,
 {
+    log::debug!("distrod-exec: exec_command_in_distro");
     let inner = || -> Result<()> {
         let cred = get_real_credential().with_context(|| "Failed to get the real credential.")?;
 
