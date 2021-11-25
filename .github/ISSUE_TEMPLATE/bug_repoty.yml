@@ -1,0 +1,53 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+body:
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: false
+  - type: input
+    attributes:
+      label: Windows version
+      description: Please share the output of `winver` command on Windows
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Linux kernel version
+      description: Please share the output of `uname -a` command on any WSL distribution
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Distro
+      description: Please share your distro version
+      placeholder: Ubuntu 20.04
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Please share the output of the trace logs, following [the reference](https://github.com/nullpo-head/wsl-distrod/blob/main/docs/references.md#enable-debug-logging-of-distrod)
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: additional comment
+    validations:
+      required: false
+
