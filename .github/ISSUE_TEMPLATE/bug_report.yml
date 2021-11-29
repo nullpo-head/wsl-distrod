@@ -33,7 +33,7 @@ body:
   - type: input
     attributes:
       label: Linux kernel version
-      description: Please share the output of `uname -a` command on any WSL distribution
+      description: Please share the output of `uname -a` command on the Distrod distribution. If Distrod is crashing, try `wsl -d Distrod -e uname -a` in a Command Prompt window.
     validations:
       required: true
   - type: input
