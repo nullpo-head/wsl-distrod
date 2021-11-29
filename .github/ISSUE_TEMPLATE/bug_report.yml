@@ -49,7 +49,7 @@ body:
       options:
         - Installed by Distrod wizard
         - Enabled `distrod` in an existing WSL2 distro
-    validation:
+    validations:
       required: true
   - type: textarea
     attributes:
