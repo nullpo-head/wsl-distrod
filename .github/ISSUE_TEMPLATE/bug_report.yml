@@ -44,10 +44,13 @@ body:
     validations:
       required: true
   - type: dropdown
-    label: How did you install that distro?
-    options:
-      - Installed by Distrod wizard
-      - Enabled `distrod` in an existing WSL2 distro
+    attributes:
+      label: How did you install that distro?
+      options:
+        - Installed by Distrod wizard
+        - Enabled `distrod` in an existing WSL2 distro
+    validation:
+      required: true
   - type: textarea
     attributes:
       label: Logs
