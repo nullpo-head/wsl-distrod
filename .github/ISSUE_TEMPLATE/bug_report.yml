@@ -43,6 +43,11 @@ body:
       placeholder: Ubuntu 20.04
     validations:
       required: true
+  - type: dropdown
+    label: How did you install that distro?
+    options:
+      - Installed by Distrod wizard
+      - Enabled `distrod` in an existing WSL2 distro
   - type: textarea
     attributes:
       label: Logs
