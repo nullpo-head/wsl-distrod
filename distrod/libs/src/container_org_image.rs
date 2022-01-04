@@ -29,7 +29,7 @@ pub struct ContainerOrgImageList;
 #[async_trait]
 impl DistroImageFetcher for ContainerOrgImageList {
     fn get_name(&self) -> &str {
-        "Download an image from linxcontainers.org"
+        "Download an image from linuxcontainers.org"
     }
 
     async fn fetch(&self) -> Result<DistroImageList> {
