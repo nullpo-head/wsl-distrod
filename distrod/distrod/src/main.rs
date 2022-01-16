@@ -195,10 +195,10 @@ fn run(opts: Opts) -> Result<()> {
 }
 
 fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
+    distro::initialize_distro_rootfs(HostPath::new("/")?, opts.do_full_initialization)
+        .with_context(|| "Failed to initialize the rootfs.")?;
     shell_hook::enable_default_shell_hook()
         .with_context(|| "Failed to enable the hook to the default shell.")?;
-    distro::initialize_distro_rootfs("/", opts.do_full_initialization)
-        .with_context(|| "Failed to initialize the rootfs.")?;
     log::info!("Distrod has been enabled. Now your shell will start under systemd.");
     if opts.start_on_windows_boot {
         log::info!(
@@ -219,6 +219,12 @@ fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
 fn disable_wsl_exec_hook(_opts: DisableOpts) -> Result<()> {
     shell_hook::disable_default_shell_hook()
         .with_context(|| "Failed to disable the hook to the default shell.")?;
+    if let Err(e) = distro::cleanup_distro_rootfs(HostPath::new("/")?) {
+        log::warn!(
+            "Failed to clean up the rootfs. Some garbage might not be removed.: {:?}",
+            e
+        );
+    }
     log::info!("Distrod has been disabled. Now systemd will not start automatically.");
     if let Err(e) = autostart::disable_autostart_on_windows_boot(
         &wsl_interop::get_distro_name().with_context(|| "Failed to get the distro name.")?,
@@ -288,7 +294,8 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
                 .into()
         }
     };
-    if !Path::new(&install_dir).exists() {
+    let install_dir = Path::new(&install_dir);
+    if !install_dir.exists() {
         std::fs::create_dir_all(&install_dir)
             .with_context(|| format!("Failed to make a directory: {:?}.", &install_dir))?;
     }
@@ -300,8 +307,13 @@ async fn create_distro(opts: CreateOpts) -> Result<()> {
         .unpack(&install_dir)
         .with_context(|| format!("Failed to unpack the image to '{:?}'.", &install_dir))?;
 
-    distro::initialize_distro_rootfs(&install_dir, true)
-        .with_context(|| "Failed to initialize the rootfs.")?;
+    distro::initialize_distro_rootfs(
+        HostPath::new(&install_dir.canonicalize().with_context(|| {
+            format!("Failed to get the canonicalized path of {:?}", &install_dir)
+        })?)?,
+        true,
+    )
+    .with_context(|| "Failed to initialize the rootfs.")?;
 
     log::info!("{} is created at {:?}", &image_name, install_dir);
     Ok(())

@@ -54,8 +54,9 @@ fn get_user_name(drive_path: &Path) -> Result<String> {
         .output()
         .with_context(|| "Failed to execute whoami.exe.")?;
     if !user_name.status.success() {
-        log::warn!(
-            "whoami.exe had an error: {}",
+        bail!(
+            "whoami.exe had an error. command: '{:#?}', stderr: '{}'",
+            whoami,
             String::from_utf8_lossy(&user_name.stderr)
         );
     }
