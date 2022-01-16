@@ -100,7 +100,13 @@ impl EnvShellScript {
 pub struct EnvFile {
     pub file_path: PathBuf,
     envs: HashMap<String, usize>,
-    env_file_lines: EnvFileLines,
+    lines_with_metadata: Vec<EnvFileLineWithMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct EnvFileLineWithMetadata {
+    line: EnvFileLine,
+    is_removed: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -127,7 +133,7 @@ impl EnvFile {
             return Ok(EnvFile {
                 file_path: path.as_ref().to_owned(),
                 envs: HashMap::<String, usize>::default(),
-                env_file_lines: EnvFileLines::default(),
+                lines_with_metadata: vec![],
             });
         }
 
@@ -142,21 +148,26 @@ impl EnvFile {
             .map_err(|e| anyhow!("Failed to parse a line: {:?}", e))?
             .1;
         let mut envs = HashMap::<String, usize>::default();
-        for (i, line) in env_file_lines.iter().enumerate() {
-            if let EnvFileLine::Env(env) = line {
+        let mut lines_with_metadata = vec![];
+        for (i, line) in env_file_lines.0.into_iter().enumerate() {
+            if let EnvFileLine::Env(env) = &line {
                 envs.insert(env.key.clone(), i);
             };
+            lines_with_metadata.push(EnvFileLineWithMetadata {
+                line,
+                is_removed: false,
+            });
         }
 
         Ok(EnvFile {
             file_path: path.as_ref().to_owned(),
             envs,
-            env_file_lines,
+            lines_with_metadata,
         })
     }
 
     pub fn get_env(&self, key: &str) -> Option<&str> {
-        let val = match self.env_file_lines[*self.envs.get(key)?] {
+        let val = match self.lines_with_metadata[*self.envs.get(key)?].line {
             EnvFileLine::Env(ref env_statement) => env_statement.value.as_str(),
             _ => unreachable!(),
         };
@@ -164,10 +175,18 @@ impl EnvFile {
     }
 
     pub fn put_env(&mut self, key: String, value: String) {
-        // we don't allow to put values for safety, otherwise it will confuse pam_env.so and
-        // may let other variables be overwritten.
+        // we don't allow values to contain newlines or escapes for safety,
+        // otherwise it will confuse pam_env.so and may let other variables be overwritten.
         assert!(!value.contains('\n') && !value.contains('\\'));
         self.put_env_with_no_sanity_check(key, single_quote_str_for_shell(&value))
+    }
+
+    pub fn remove_env(&mut self, key: &str) {
+        let index = match self.envs.remove(key) {
+            Some(index) => index,
+            None => return,
+        };
+        self.lines_with_metadata[index].is_removed = true;
     }
 
     pub fn put_path(&mut self, path_val: String) {
@@ -184,11 +203,24 @@ impl EnvFile {
         self.put_env_with_no_sanity_check("PATH".to_owned(), pathenv_value);
     }
 
+    pub fn remove_path<S: AsRef<str>>(&mut self, path_val: S) {
+        let path = match self.get_env("PATH") {
+            Some(path) => path,
+            None => return,
+        };
+        let pathenv_value = {
+            let mut path_variable = PathVariable::parse(path);
+            path_variable.remove_path(path_val.as_ref());
+            path_variable.serialize()
+        };
+        self.put_env_with_no_sanity_check("PATH".to_owned(), pathenv_value);
+    }
+
     fn put_env_with_no_sanity_check(&mut self, key: String, value: String) {
         let line_index = self.envs.get(&key);
         match line_index {
             Some(index) => {
-                let line = &mut self.env_file_lines[*index];
+                let line = &mut self.lines_with_metadata[*index].line;
                 match *line {
                     EnvFileLine::Env(ref mut env_statement) => {
                         env_statement.value = value;
@@ -197,14 +229,17 @@ impl EnvFile {
                 }
             }
             None => {
-                let line = EnvFileLine::Env(EnvStatement {
-                    key: key.clone(),
-                    value,
-                    leading_characters: String::new(),
-                    following_characters: String::new(),
-                });
-                self.env_file_lines.push(line);
-                self.envs.insert(key, self.env_file_lines.len() - 1);
+                let line = EnvFileLineWithMetadata {
+                    line: EnvFileLine::Env(EnvStatement {
+                        key: key.clone(),
+                        value,
+                        leading_characters: String::new(),
+                        following_characters: String::new(),
+                    }),
+                    is_removed: false,
+                };
+                self.lines_with_metadata.push(line);
+                self.envs.insert(key, self.lines_with_metadata.len() - 1);
             }
         }
     }
@@ -214,7 +249,19 @@ impl EnvFile {
             File::create(&self.file_path)
                 .with_context(|| format!("Failed to create {:?}.", &self.file_path))?,
         );
-        file.write_all(self.env_file_lines.serialize().as_bytes())?;
+        let env_file_lines = EnvFileLines(
+            self.lines_with_metadata
+                .iter()
+                .filter_map(|line_with_metadata| {
+                    if line_with_metadata.is_removed {
+                        None
+                    } else {
+                        Some(line_with_metadata.line.clone())
+                    }
+                })
+                .collect(),
+        );
+        file.write_all(env_file_lines.serialize().as_bytes())?;
         Ok(())
     }
 }
@@ -333,9 +380,15 @@ fn following_characters(line: &[u8]) -> IResult<&[u8], &[u8]> {
     take_while(|c| !is_newline(c))(line)
 }
 
+// PathVariable parses the value of PATH variable and provides the interface to modify it.
+// PathVariable is smart enough to handle common values, but not intended to support all escape characters.
+// It works in such a way that the original string is rewritten as little as possible.
 #[derive(Debug, Clone)]
 pub struct PathVariable<'a> {
+    // parsed_paths may contain values with escape and quotations, such as "'path_with_\\backslash'"
+    // The values are NOT normalized to unescaped values.
     parsed_paths: Vec<&'a str>,
+    // added_paths should not contain escape strings.
     added_paths: Vec<&'a str>,
     path_set: HashSet<&'a str>,
     surrounding_quote: Option<char>,
@@ -363,7 +416,7 @@ impl<'a> PathVariable<'a> {
 
         let mut path_set = HashSet::<&str>::new();
         for path in paths.iter() {
-            path_set.insert(*path);
+            path_set.insert(unquote_path(*path));
         }
 
         PathVariable {
@@ -400,25 +453,56 @@ impl<'a> PathVariable<'a> {
     }
 
     pub fn put_path(&mut self, path_val: &'a str) {
-        if self.path_set.contains(path_val) {
+        let key = unquote_path(path_val);
+        if self.path_set.contains(key) {
             return;
         }
         self.added_paths.push(path_val);
-        self.path_set
-            .insert(self.added_paths[self.added_paths.len() - 1]);
+        self.path_set.insert(key);
+    }
+
+    pub fn remove_path(&mut self, path_val: &'a str) {
+        let key = unquote_path(path_val);
+        if !self.path_set.contains(key) {
+            return;
+        }
+
+        if let Some(idx) = self
+            .parsed_paths
+            .iter()
+            .position(|path| unquote_path(*path) == key)
+        {
+            self.parsed_paths.remove(idx);
+        } else if let Some(idx) = self
+            .added_paths
+            .iter()
+            .position(|path| unquote_path(*path) == key)
+        {
+            self.added_paths.remove(idx);
+        }
+        self.path_set.remove(key);
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.added_paths
             .iter()
             .rev()
-            .chain(self.parsed_paths.iter())
             .copied()
+            .chain(self.parsed_paths.iter().map(|path| unquote_path(*path)))
     }
 }
 
 fn single_quote_str_for_shell(s: &str) -> String {
     format!("'{}'", s.replace("'", "'\"'\"'"))
+}
+
+fn unquote_path(s: &str) -> &str {
+    for quote in ["'", "\""] {
+        if s.starts_with(quote) && s.ends_with(quote) {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
 }
 
 #[cfg(test)]
@@ -542,6 +626,28 @@ mod test_path_variable {
     }
 
     #[test]
+    fn test_simple_variable_removal() {
+        let path_value = "/opt/bin:/usr/local/bin:/usr/bin:/sbin:/bin";
+        let mut path = PathVariable::parse(path_value);
+        assert_eq!(path_value, path.serialize().as_str());
+
+        path.remove_path("/usr/bin");
+        assert_eq!("/opt/bin:/usr/local/bin:/sbin:/bin", path.serialize());
+
+        path.remove_path("/opt/bin");
+        assert_eq!("/usr/local/bin:/sbin:/bin", path.serialize());
+
+        path.remove_path("/bin");
+        assert_eq!("/usr/local/bin:/sbin", path.serialize());
+
+        path.put_path("/bin");
+        assert_eq!("'/bin':/usr/local/bin:/sbin", path.serialize());
+
+        path.remove_path("/bin");
+        assert_eq!("/usr/local/bin:/sbin", path.serialize());
+    }
+
+    #[test]
     fn test_quoted_variable() {
         // quoted simple value
         let path_value = "\"/usr/local/bin:/usr/bin:/sbin:/bin\"";
@@ -583,6 +689,23 @@ mod test_path_variable {
     }
 
     #[test]
+    fn test_quoted_variable_removal() {
+        // quoted simple value
+        let path_value = "\"/usr/local/bin:/usr/bin:/sbin:/bin\"";
+        let mut path = PathVariable::parse(path_value);
+        path.remove_path("/usr/bin");
+        assert_eq!("\"/usr/local/bin:/sbin:/bin\"", path.serialize());
+
+        // values with their own quotes
+        let path_value = "'/usr/local/bin':'/usr/bin':/sbin:'/bin'";
+        let mut path = PathVariable::parse(path_value);
+        path.remove_path("/usr/bin");
+        assert_eq!("'/usr/local/bin':/sbin:'/bin'", path.serialize());
+        path.remove_path("/bin");
+        assert_eq!("'/usr/local/bin':/sbin", path.serialize());
+    }
+
+    #[test]
     fn test_value_not_quoted_as_a_whole() {
         let path_value = "\"/mnt/c/Program Files/foo\":/usr/local/bin:/usr/bin:/sbin:/bin";
         let path = PathVariable::parse(path_value);
@@ -590,7 +713,7 @@ mod test_path_variable {
 
         assert_eq!(
             vec![
-                "\"/mnt/c/Program Files/foo\"",
+                "/mnt/c/Program Files/foo",
                 "/usr/local/bin",
                 "/usr/bin",
                 "/sbin",
@@ -609,7 +732,7 @@ mod test_path_variable {
                 "/usr/bin",
                 "/sbin",
                 "/bin",
-                "\"/mnt/c/Program Files/foo\"",
+                "/mnt/c/Program Files/foo",
             ],
             path.iter().collect::<Vec<&str>>()
         );
@@ -620,11 +743,11 @@ mod test_path_variable {
 
         assert_eq!(
             vec![
-                "\"/usr/local/bin\"",
+                "/usr/local/bin",
                 "/usr/bin",
                 "/sbin",
                 "/bin",
-                "\"/mnt/c/Program Files/foo\"",
+                "/mnt/c/Program Files/foo",
             ],
             path.iter().collect::<Vec<&str>>()
         );
@@ -635,7 +758,7 @@ mod test_path_variable {
         let mut path = PathVariable::parse(path_value);
         assert_eq!(path_value, path.serialize());
 
-        assert_eq!(vec!["\"/bin\""], path.iter().collect::<Vec<&str>>());
+        assert_eq!(vec!["/bin"], path.iter().collect::<Vec<&str>>());
 
         path.put_path("/new/path1/space bin");
         path.put_path("/new/path2/bin");
@@ -876,6 +999,40 @@ mod test_env_file {
             QUOTED2='quoted2'\n\
 			FOO='foo3'\n\
 			NEW1='NEW1'\n\
+		";
+        let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(expected, new_cont);
+    }
+
+    #[test]
+    fn test_remove_env_and_save() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let cont = "\
+            # This is a comment line
+		    PATH='/path/by/distrod':test:'/another/path/by/distrod':foo:bar  #comment preserved \n\
+            WSL_INTEROP=/run/foo\n\
+            # This is another comment line
+			BAR=bar\n\
+		";
+        write!(&mut tmp, "{}", cont).unwrap();
+        let mut env = EnvFile::open(tmp.path()).unwrap();
+
+        env.remove_env("WSL_INTEROP");
+        env.remove_path("/path/by/distrod");
+        env.remove_path("/another/path/by/distrod");
+        env.put_env("TO_BE_DELETED".to_owned(), "TO_BE_DELETED".to_owned());
+        env.remove_env("TO_BE_DELETED");
+
+        assert_eq!(env.get_env("TO_BE_DELETED"), None);
+        assert_eq!(env.get_env("WSL_INTEROP"), None);
+        assert_eq!(env.get_env("PATH"), Some("test:foo:bar"));
+
+        env.write().unwrap();
+        let expected = "\
+            # This is a comment line
+		    PATH=test:foo:bar  #comment preserved \n\
+            # This is another comment line
+			BAR=bar\n\
 		";
         let new_cont = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(expected, new_cont);
