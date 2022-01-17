@@ -645,13 +645,40 @@ fn remove_systemd_resolv_conf(rootfs: &HostPath) -> Result<()> {
     Ok(())
 }
 
-fn fix_hostname(rootfs: &HostPath) -> Result<(), anyhow::Error> {
-    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(rootfs);
+fn fix_hostname(rootfs: &HostPath) -> Result<()> {
     let mut hostname_buf = vec![0; 64];
-    let hostname =
-        nix::unistd::gethostname(&mut hostname_buf).with_context(|| "Failed to get hostname.")?;
-    fs::write(&hostname_path, hostname.to_str()?.as_bytes())
+    let hostname = nix::unistd::gethostname(&mut hostname_buf)
+        .with_context(|| "Failed to get hostname.")?
+        .to_str();
+    let hostname = hostname
+        .with_context(|| format!("Failed to convert hostname to string. {:#?}", &hostname))?;
+
+    update_etc_hostname(rootfs, hostname).with_context(|| "Failed to update /etc/hostname.")?;
+    update_etc_hosts(rootfs, hostname).with_context(|| "Failed to update /etc/hosts.")?;
+
+    Ok(())
+}
+
+fn update_etc_hostname(rootfs: &HostPath, hostname: &str) -> Result<()> {
+    let hostname_path = ContainerPath::new("/etc/hostname")?.to_host_path(rootfs);
+    fs::write(&hostname_path, hostname.as_bytes())
         .with_context(|| format!("Failed to write hostname to '{:?}'.", &hostname_path))?;
+    Ok(())
+}
+
+fn update_etc_hosts(rootfs: &HostPath, hostname: &str) -> Result<()> {
+    // /etc/hosts has a line like
+    // 127.0.1.1     LXC_NAME
+    // We replace the LXC_NAME with the actual hostname.
+
+    let hosts_path = ContainerPath::new("/etc/hosts")?.to_host_path(rootfs);
+    let current_hosts = fs::read_to_string(hosts_path.as_path())
+        .with_context(|| format!("Failed to read hosts file '{:?}'.", &hosts_path))?;
+    let line_pattern =
+        regex::Regex::new(r#"\bLXC_NAME\b"#).expect("Failed to compile the regex for /etc/hosts.");
+    let new_hosts = line_pattern.replace_all(&current_hosts, hostname);
+    fs::write(&hosts_path, new_hosts.as_bytes())
+        .with_context(|| format!("Failed to write hostname to '{:?}'.", &hosts_path))?;
     Ok(())
 }
 
@@ -956,5 +983,39 @@ mod test_sanity_check {
         assert!(!sanity_check_general_wsl_envs(&OsString::from(
             "Ubuntu-20.04\ntest"
         )));
+    }
+}
+
+#[cfg(test)]
+mod test_update_etc_hosts {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cleanup_distro_rootfs() {
+        let tmpdir = TempDir::new().unwrap();
+        fs::create_dir_all(tmpdir.path().join("etc"))
+            .expect("Failed to create the temporary /etc directory.");
+
+        let etc_hosts_path = tmpdir.path().join("etc/hosts");
+        let etc_hosts = "\n\
+            127.0.1.1     LXC_NAME\n\
+            8.8.8.8       WEIRD_LXC_NAME_FOR_ANOTHER_MACHINE\n";
+        fs::write(&etc_hosts_path, etc_hosts.as_bytes())
+            .expect("Failed to write the temporary /etc/hosts file.");
+
+        update_etc_hosts(
+            &HostPath::new(tmpdir.path()).expect("Failed to create HostPath."),
+            "ubuntu",
+        )
+        .unwrap();
+
+        let new_etc_hosts = fs::read_to_string(&etc_hosts_path)
+            .expect("Failed to read the new temporary /etc/hosts file.");
+        assert_eq!(
+            new_etc_hosts,
+            "\n127.0.1.1     ubuntu\n\
+            8.8.8.8       WEIRD_LXC_NAME_FOR_ANOTHER_MACHINE\n"
+        );
     }
 }
