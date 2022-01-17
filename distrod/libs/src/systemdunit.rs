@@ -75,15 +75,16 @@ impl SystemdUnitDisabler {
     }
 
     fn remove_unit_symlinks(&self) -> Result<()> {
-        let links = self.collect_unit_symlinks()?;
-        for link in links {
-            let link = link?;
+        for link in self
+            .collect_unit_symlinks()
+            .with_context(|| "Failed to collect unit symlinks to remove.")?
+        {
             fs::remove_file(&link).with_context(|| format!("Failed to remove '{:?}'.", &link))?;
         }
         Ok(())
     }
 
-    fn collect_unit_symlinks(&self) -> Result<glob::Paths> {
+    fn collect_unit_symlinks(&self) -> Result<Vec<PathBuf>> {
         let local_unit_path = self.get_local_unit_path();
         glob::glob(&format!(
             "{}/**/{}",
@@ -99,19 +100,25 @@ impl SystemdUnitDisabler {
                 ))?
                 .to_string_lossy()
         ))
-        .with_context(|| "Glob pattern error.")
+        .with_context(|| "Glob pattern error.")?
+        .map(|link| link.with_context(|| "An iterated link is an error"))
+        .collect()
     }
 
     fn get_company_units(&self) -> Result<Vec<SystemdUnitDisabler>> {
-        let service_file = self.collect_unit_symlinks()?.next();
-        if service_file.is_none() {
+        let service_file = self
+            .collect_unit_symlinks()
+            .with_context(|| "Failed to collect symlinks to get company units from")?;
+        if service_file.is_empty() {
             return Ok(vec![]);
         }
-        let unit_path = service_file.unwrap()?;
-        let unit = fs::read_to_string(&unit_path)
-            .with_context(|| format!("Failed to read {:?}.", &unit_path))?;
+        let unit_path = service_file
+            .first()
+            .expect("service_file should not be empty.");
+        let unit = read_symlink_content(&self.rootfs_path, unit_path)
+            .with_context(|| format!("Failed to read a unit path {:?}.", unit_path))?;
         let parsed_systemd_unit = systemd_parser::parse_string(&unit)
-            .with_context(|| format!("Failed to parse unit file '{:?}'.", &unit_path))?;
+            .with_context(|| format!("Failed to parse unit file '{:?}'.", unit_path))?;
 
         let install = parsed_systemd_unit.lookup_by_category("Install");
         let company_units = install
@@ -158,6 +165,22 @@ impl SystemdUnitDisabler {
     fn get_local_unit_path(&self) -> PathBuf {
         get_local_unit_path(&self.rootfs_path, &self.name)
     }
+}
+
+fn read_symlink_content(rootfs: &Path, symlink_path: &Path) -> Result<String> {
+    let symlink_target = fs::read_link(symlink_path)
+        .with_context(|| format!("Failed to read symlink {:?}.", symlink_path))?;
+    let symlink_target = if symlink_target.is_absolute() {
+        rootfs.join(symlink_target.strip_prefix("/")?)
+    } else {
+        symlink_target
+    };
+    fs::read_to_string(&symlink_target).with_context(|| {
+        format!(
+            "Failed to read the contents of the symlink target {:?}.",
+            &symlink_target
+        )
+    })
 }
 
 #[derive(Debug, Clone, Default)]
