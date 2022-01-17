@@ -1,9 +1,16 @@
 name: CD
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      is_prerelease:
+        description: "Whether this is a pre-release (yes/no)"
+        required: false
+        default: "no"
+      skips_version_bump:
+        description: "Whether to skip automatic version bump (yes/no)"
+        required: false
+        default: "no"
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,13 +47,18 @@ jobs:
           zip -r "distrod_wsl_launcher-${{ env.ARCH_NAME }}.zip" "distrod_wsl_launcher-${{ env.ARCH_NAME }}"
           mv "distrod_wsl_launcher-${{ env.ARCH_NAME }}.zip" assets/
 
-      - name: Read the commit message and use it as a body of the new release
-        shell: bash
-        run: |
-          release="$(git log $(echo ${{ github.ref }} | grep -o 'v.*') -1 --pretty=format:%B)"  # Use the commit message as the release message
-          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
-          echo "$release" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+      - name: Conventional Changelog Action
+        id: changelog
+        uses: TriPSs/conventional-changelog-action@v3
+        with:
+          github-token: ${{ secrets.github_token }}
+          version-file: ./distrod/distrod/Cargo.toml,./distrod/distrod-exec/Cargo.toml,./distrod/distrod_wsl_launcher/Cargo.toml
+          version-path: package.version
+          skip-on-empty: false
+          git-user-name: "github-actions[bot]"
+          git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
+          release-count: "0"
+          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
 
       - name: Upload Binaries to Release
         uses: svenstaro/upload-release-action@v2
@@ -54,10 +66,11 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: assets/*
           file_glob: true
-          tag: ${{ github.ref }}
+          tag: ${{ steps.changelog.outputs.tag }}
           overwrite: true
-          body: |
-            ${{ env.RELEASE_BODY }}
+          prerelease: ${{ github.event.inputs.is_prerelease == 'yes' }}
+          release_name: ${{ steps.changelog.outputs.tag }}
+          body: ${{ steps.changelog.outputs.clean_changelog }}
 
   build-distrod_wsl_launcher:
     name: Build Distrod WSL launcher
