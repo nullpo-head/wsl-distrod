@@ -152,8 +152,12 @@ impl DistroLauncher {
 
         self.mount_per_user_envs_script()
             .with_context(|| "Failed to mount per-user envs script.")?;
-        write_system_env_files(HostPath::new(&rootfs)?, self.system_envs, self.system_paths)
-            .with_context(|| "Failed to write system env file.")?;
+        append_to_system_env_files(
+            &HostPath::new(&rootfs)?,
+            self.system_envs,
+            self.system_paths,
+        )
+        .with_context(|| "Failed to write system env file.")?;
 
         self.container_launcher
             .with_init_env("container", "distrod") // See https://systemd.io/CONTAINER_INTERFACE/
@@ -213,7 +217,7 @@ impl DistroLauncher {
 }
 
 fn set_wsl_interop_envs_in_system_envs(distro_launcher: &mut DistroLauncher) -> Result<()> {
-    for (key, value) in collect_safe_wsl_interop_envs()
+    for (key, value) in collect_wsl_interop_envs_for_system_envs()
         .with_context(|| "Failed to collect safe WSL interop envs")?
     {
         log::debug!("WSL envs: {:?} = {:?}", &key, &value);
@@ -262,7 +266,7 @@ fn get_cmdline_with_wsl_interop_envs_for_systemd<P: AsRef<Path>>(
 
     // Set default environment vairables for the systemd services.
     for (key, value) in
-        collect_safe_wsl_interop_envs().with_context(|| "Failed to collect WSL envs.")?
+        collect_wsl_interop_envs_for_system_envs().with_context(|| "Failed to collect WSL envs.")?
     {
         cmdline.extend(" ".as_bytes());
         cmdline.extend(env_to_systemd_setenv_arg(&key, &value).as_bytes());
@@ -272,20 +276,16 @@ fn get_cmdline_with_wsl_interop_envs_for_systemd<P: AsRef<Path>>(
     Ok(cmdline)
 }
 
-fn collect_safe_wsl_interop_envs() -> Result<Vec<(OsString, OsString)>> {
+fn collect_wsl_interop_envs_for_system_envs() -> Result<Vec<(OsString, OsString)>> {
     // Collect only harmless environment variables.
-    // Distrod can be running as setuid program. So, non-root user can set arbitrary values.
-    // Thus, mount_per_user_wsl_envs_script or similar functions should collect only restricted value.
+    // Distrod can be running as setuid program. So, non-root user can set arbitrary environment variables.
+    // Thus, WSL envs which are applied to all users including root should be collected from restricted values.
     // Actually, this doesn't matter for now because WSL allows a non-root user to be root by `wsl.exe -u root`,
     // but be prepared for this WSL spec to be improved in a safer direction someday.
     let mut envs = vec![];
-    let envs_to_set = [
-        OsStr::new("WSL_INTEROP"),
-        OsStr::new("WSLENV"),
-        OsStr::new("WSL_DISTRO_NAME"),
-    ];
+    let wsl_interop_env_names_for_system_envs = get_names_of_wsl_interop_envs_for_system_envs();
     for (key, value) in collect_wsl_env_vars().with_context(|| "Failed to collect WSL envs.")? {
-        if !envs_to_set.contains(&key.as_os_str()) {
+        if !wsl_interop_env_names_for_system_envs.contains(&key) {
             continue;
         }
         if !sanity_check_wsl_env(&key, &value) {
@@ -475,26 +475,6 @@ fn make_host_mountpoints_shared() -> Result<()> {
     Ok(())
 }
 
-fn write_system_env_files(
-    rootfs_path: HostPath,
-    envs: HashMap<String, String>,
-    paths: HashSet<String>,
-) -> Result<()> {
-    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(&rootfs_path);
-    let mut env_file = EnvFile::open(&env_file_path)
-        .with_context(|| format!("Failed to open '{:?}'.", &env_file_path))?;
-    for (name, value) in envs {
-        env_file.put_env(name, value);
-    }
-    for path in paths {
-        env_file.put_path(path);
-    }
-    env_file
-        .write()
-        .with_context(|| format!("Failed to write system env file on {:?}", env_file_path))?;
-    Ok(())
-}
-
 pub struct Distro {
     rootfs: PathBuf,
     container: Container,
@@ -556,16 +536,16 @@ pub fn is_inside_running_distro() -> bool {
         .any(|entry| entry.path.starts_with(DISTRO_OLD_ROOT_PATH))
 }
 
-pub fn initialize_distro_rootfs<P: AsRef<Path>>(
+pub fn initialize_distro_rootfs<P: AsRef<HostPath>>(
     rootfs: P,
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
-    let rootfs = HostPath::new(rootfs.as_ref())?;
-    do_distro_independent_initialization(&rootfs, overwrites_potential_userfiles)?;
-    do_distro_specific_initialization(&rootfs, overwrites_potential_userfiles)
+    let rootfs = rootfs.as_ref();
+    do_distro_independent_initialization(rootfs, overwrites_potential_userfiles)?;
+    do_distro_specific_initialization(rootfs, overwrites_potential_userfiles)
 }
 
-pub fn do_distro_independent_initialization(
+fn do_distro_independent_initialization(
     rootfs: &HostPath,
     overwrites_potential_userfiles: bool,
 ) -> Result<()> {
@@ -888,6 +868,91 @@ fn put_readenv_in_sudo_pam(rootfs: &HostPath) -> Result<()> {
     Ok(())
 }
 
+pub fn cleanup_distro_rootfs<P: AsRef<HostPath>>(rootfs: P) -> Result<()> {
+    let rootfs = rootfs.as_ref();
+    cleanup_wsl_interop_envs_in_system_envs(rootfs).with_context(|| {
+        "Failed to clean up the WSL inter-op environment variables from system environment variables."
+    })?;
+    remove_distrod_bin_from_path(rootfs).with_context(|| "Failed to remove distrod bin path.")?;
+    Ok(())
+}
+
+fn cleanup_wsl_interop_envs_in_system_envs(rootfs: &HostPath) -> Result<()> {
+    remove_from_system_env_files(
+        rootfs,
+        get_names_of_wsl_interop_envs_for_system_envs()
+            .into_iter()
+            .map(|s| s.to_string_lossy().to_string()),
+        Vec::<String>::default(),
+    )
+    .with_context(|| "Failed to remove WSL interop envs from /etc/environment")?;
+    Ok(())
+}
+
+fn remove_distrod_bin_from_path(rootfs: &HostPath) -> Result<()> {
+    remove_from_system_env_files(
+        rootfs,
+        Vec::<String>::default(),
+        vec![distrod_config::get_distrod_bin_dir_path()],
+    )
+    .with_context(|| "Failed to remove the path to distrod bin from /etc/environement")?;
+    Ok(())
+}
+
+fn get_names_of_wsl_interop_envs_for_system_envs() -> Vec<OsString> {
+    vec![
+        OsString::from("WSL_INTEROP"),
+        OsString::from("WSLENV"),
+        OsString::from("WSL_DISTRO_NAME"),
+    ]
+}
+
+fn append_to_system_env_files(
+    rootfs_path: &HostPath,
+    envs: HashMap<String, String>,
+    paths: HashSet<String>,
+) -> Result<()> {
+    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(rootfs_path);
+    let mut env_file = EnvFile::open(&env_file_path)
+        .with_context(|| format!("Failed to open '{:?}'.", &env_file_path))?;
+    for (name, value) in envs {
+        env_file.put_env(name, value);
+    }
+    for path in paths {
+        env_file.put_path(path);
+    }
+    env_file
+        .write()
+        .with_context(|| format!("Failed to write system env file on {:?}", env_file_path))?;
+    Ok(())
+}
+
+fn remove_from_system_env_files<S1, S2, I1, I2>(
+    rootfs_path: &HostPath,
+    envs: I1,
+    paths: I2,
+) -> Result<()>
+where
+    S1: AsRef<str>,
+    S2: AsRef<str>,
+    I1: IntoIterator<Item = S1>,
+    I2: IntoIterator<Item = S2>,
+{
+    let env_file_path = &ContainerPath::new("/etc/environment")?.to_host_path(rootfs_path);
+    let mut env_file = EnvFile::open(&env_file_path)
+        .with_context(|| format!("Failed to open '{:?}'.", &env_file_path))?;
+    for name in envs.into_iter() {
+        env_file.remove_env(name.as_ref());
+    }
+    for path in paths.into_iter() {
+        env_file.remove_path(path.as_ref());
+    }
+    env_file
+        .write()
+        .with_context(|| format!("Failed to write system env file on {:?}", env_file_path))?;
+    Ok(())
+}
+
 fn export_distro_run_info(rootfs: &Path, init_pid: u32) -> Result<()> {
     if let Ok(Some(_)) = get_distro_run_info_file(false, false) {
         fs::remove_file(&get_distro_run_info_path()?)
@@ -983,6 +1048,42 @@ mod test_sanity_check {
         assert!(!sanity_check_general_wsl_envs(&OsString::from(
             "Ubuntu-20.04\ntest"
         )));
+    }
+}
+
+#[cfg(test)]
+mod test_cleanup_distro_rootfs {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cleanup_distro_rootfs() {
+        let tmpdir = TempDir::new().unwrap();
+        fs::create_dir_all(tmpdir.path().join("etc"))
+            .expect("Failed to create the temporary /etc directory.");
+
+        let etc_environment_path = tmpdir.path().join("etc/environment");
+        let etc_environment = "\n\
+            PATH='/opt/distrod/bin':/usr/local/bin:/usr/bin:/sbin:/bin\n\
+            WSL_INTEROP=/run/WSL/12_interop\n\
+            OTHER_ENV1=1\n\
+            WSL_DISTRO_NAME='ubuntu'\n\
+            WSLENV='hoge:fuga'\n\
+            OTHER_ENV2=2\n";
+        fs::write(&etc_environment_path, etc_environment.as_bytes())
+            .expect("Failed to write the temporary /etc/environment file.");
+
+        cleanup_distro_rootfs(HostPath::new(tmpdir.path()).expect("Failed to create HostPath."))
+            .expect("Failed to cleanup the distro rootfs.");
+
+        let new_etc_environment = fs::read_to_string(&etc_environment_path)
+            .expect("Failed to read the new temporary /etc/environment file.");
+        assert_eq!(
+            new_etc_environment,
+            "\nPATH=/usr/local/bin:/usr/bin:/sbin:/bin\n\
+            OTHER_ENV1=1\n\
+            OTHER_ENV2=2\n"
+        );
     }
 }
 

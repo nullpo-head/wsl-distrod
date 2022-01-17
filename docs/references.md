@@ -180,18 +180,7 @@ You can continue to use your WSL instance as a regular WSL distro.
 sudo /opt/distrod/bin/distrod disable
 ```
 
-In addition, clean up the WSL related variables written in `/etc/environment`.
-Remove `WSLENV`, `WSL_DISTRO_NAME`, and `WSL_INTEROP`. You can remove `/opt/distrod/bin` from `PATH` as well.
-Distrod will be updated soon so that it does this clean up.
-
-```
-PATH="/opt/distrod/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
-WSLENV='WT_SESSION:WT_PROFILE_ID'
-WSL_DISTRO_NAME='Ubuntu-20.04'
-WSL_INTEROP='/run/WSL/12_interop'
-```
-
-If you want to completely remove distrod, just delete `/opt/distrod`
+If you also want to completely remove distrod, just delete `/opt/distrod`.
 
 ## Open a Shell Session outside the Container for Systemd
 

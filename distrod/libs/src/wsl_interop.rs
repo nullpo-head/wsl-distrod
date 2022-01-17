@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
+    iter::FromIterator,
     path::PathBuf,
 };
 
@@ -56,10 +57,7 @@ pub fn get_distro_name() -> Result<String> {
 }
 
 pub fn collect_wsl_env_vars() -> Result<HashMap<OsString, OsString>> {
-    let mut wsl_env_names = HashSet::new();
-    wsl_env_names.insert(OsString::from("WSLENV"));
-    wsl_env_names.insert(OsString::from("WSL_DISTRO_NAME"));
-    wsl_env_names.insert(OsString::from("WSL_INTEROP"));
+    let wsl_env_names = HashSet::<OsString>::from_iter(get_wsl_interop_env_names().into_iter());
 
     // Try to get them from the current process first.
     // Note that the environment variables may be modified internally, which we should collect.
@@ -100,6 +98,13 @@ pub fn collect_wsl_env_vars() -> Result<HashMap<OsString, OsString>> {
     }
 
     bail!("Couldn't find WSL envs");
+}
+
+fn get_wsl_interop_env_names() -> Vec<OsString> {
+    ["WSL_INTEROP", "WSLENV", "WSL_DISTRO_NAME"]
+        .iter()
+        .map(OsString::from)
+        .collect()
 }
 
 pub fn collect_wsl_paths() -> Result<Vec<String>> {
