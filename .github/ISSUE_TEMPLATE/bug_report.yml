@@ -1,0 +1,67 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Distrod. Please provide a potentail bug report, following this template. Also, if you haven't starred this project yet, and you like the Distrod project, please star it!
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: false
+  - type: input
+    attributes:
+      label: Windows version
+      description: Please share the output of `winver` command on Windows
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Linux kernel version
+      description: Please share the output of `uname -a` command on the Distrod distribution. If Distrod is crashing, try `wsl -d Distrod -e uname -a` in a Command Prompt window.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Distro
+      description: Please share your distro version
+      placeholder: Ubuntu 20.04
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: How did you install that distro?
+      options:
+        - Installed by Distrod wizard
+        - Enabled `distrod` in an existing WSL2 distro
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs
+      description: |
+        Please share the output of the trace logs, following [the reference](https://github.com/nullpo-head/wsl-distrod/blob/main/docs/references.md#enable-debug-logging-of-distrod).
+        If you omit this, please provide the concise technical reason why you think the log is not necessary.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: additional comment
+    validations:
+      required: false
+
