@@ -182,6 +182,13 @@ sudo /opt/distrod/bin/distrod disable
 
 If you also want to completely remove distrod, just delete `/opt/distrod`.
 
+**For users of versions prior to 1.5**
+
+In addition, clean up the WSL related variables written in `/etc/environment`.
+Remove `WSLENV`, `WSL_DISTRO_NAME`, and `WSL_INTEROP`. You can remove `/opt/distrod/bin` from `PATH` as well.
+Prior to version 1.5, Distrod did not clean up these variables.
+This prevented `.exe` files from being launched from a `sudo` or `ssh` session.
+
 ## Open a Shell Session outside the Container for Systemd
 
 Basically, Distrod works by
