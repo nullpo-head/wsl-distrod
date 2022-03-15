@@ -78,7 +78,7 @@ where
 {
     log::debug!("distrod-exec: exec_command");
     let cred = get_real_credential().with_context(|| "Failed to get the real credential.")?;
-    cred.drop_privilege();
+    let _ = cred.try_drop_privilege();
 
     let path = CString::new(command.as_ref().as_os_str().as_bytes()).with_context(|| {
         format!(
