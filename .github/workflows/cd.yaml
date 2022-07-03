@@ -47,19 +47,6 @@ jobs:
           zip -r "distrod_wsl_launcher-${{ env.ARCH_NAME }}.zip" "distrod_wsl_launcher-${{ env.ARCH_NAME }}"
           mv "distrod_wsl_launcher-${{ env.ARCH_NAME }}.zip" assets/
 
-      - name: Conventional Changelog Action
-        id: changelog
-        uses: TriPSs/conventional-changelog-action@v3
-        with:
-          github-token: ${{ secrets.github_token }}
-          version-file: ./distrod/distrod/Cargo.toml,./distrod/distrod-exec/Cargo.toml,./distrod/distrod_wsl_launcher/Cargo.toml
-          version-path: package.version
-          skip-on-empty: false
-          git-user-name: "github-actions[bot]"
-          git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
-          release-count: "0"
-          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
-
       - name: Upload Binaries to Release
         uses: svenstaro/upload-release-action@v2
         with:
@@ -116,7 +103,7 @@ jobs:
     name: Build distrod Linux command
     runs-on: ubuntu-latest
 
-    needs: [build-portproxy-exe]
+    needs: [build-portproxy-exe, bump-version]
 
     steps:
       - uses: actions/checkout@v2
@@ -166,6 +153,24 @@ jobs:
           name: "distrod_root-${{ env.ARCH_NAME }}"
           path: distrod_root.tar.gz
           if-no-files-found: error
+
+  bump-version:
+    name: Bump the version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Conventional Changelog Action
+        id: changelog
+        uses: TriPSs/conventional-changelog-action@v3
+        with:
+          github-token: ${{ secrets.github_token }}
+          version-file: ./distrod/distrod/Cargo.toml,./distrod/distrod-exec/Cargo.toml,./distrod/distrod_wsl_launcher/Cargo.toml
+          version-path: package.version
+          skip-on-empty: false
+          git-user-name: "github-actions[bot]"
+          git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
+          release-count: "0"
+          skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
 
   build-portproxy-exe:
     name: Build portproxy.exe
