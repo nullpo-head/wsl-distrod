@@ -267,7 +267,7 @@ const WSLG_PATH: &str = "/mnt/wslg/.X11-unix";
 fn is_wsl_bind_mount_dotx11_unix() -> Result<bool> {
     // if it's an existing dir, then it's WSL>=0.60.0, we should bind-mount it
     // otherwise, it's some older versions, waiting a symlink to be created later
-    Ok(Path::new(X11_TARGET_PATH).is_dir())
+    Ok(Path::new(X11_TARGET_PATH).is_dir() && Path::new(WSLG_PATH).exists())
 }
 
 fn mount_dotx11_unix_for_wslg(distro_launcher: &mut DistroLauncher) -> Result<()> {
