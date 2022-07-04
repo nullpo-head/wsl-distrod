@@ -11,6 +11,10 @@ on:
         description: "Whether to skip automatic version bump (yes/no)"
         required: false
         default: "no"
+      skips_publish:
+        description: "Whether to skip publishing the release assets (yes/no)"
+        required: false
+        default: "no"
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,6 +53,7 @@ jobs:
 
       - name: Upload Binaries to Release
         uses: svenstaro/upload-release-action@v2
+        if: github.event.inputs.skips_publish != 'yes'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: assets/*
@@ -159,6 +164,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v2
       - name: Conventional Changelog Action
         id: changelog
         uses: TriPSs/conventional-changelog-action@v3
