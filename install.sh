@@ -65,7 +65,9 @@ update () {
 
 get_release_file() {
     if [ -n "$RELEASE_FILE" ]; then
-        cp "$RELEASE_FILE" opt_distrod.tar.gz
+        if [ "$(realpath "$RELEASE_FILE")" != "$(realpath opt_distrod.tar.gz)" ]; then
+            cp "$RELEASE_FILE" opt_distrod.tar.gz
+        fi
     else
         curl -L -O "${LATEST_RELEASE_URL}"
     fi
