@@ -193,6 +193,7 @@ jobs:
           release-count: "0"
           skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
           skip-commit: ${{ github.event.inputs.skips_version_commit == 'yes' }}
+          skip-ci: false
 
   build-portproxy-exe:
     name: Build portproxy.exe
