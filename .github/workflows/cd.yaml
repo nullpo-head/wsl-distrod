@@ -11,6 +11,10 @@ on:
         description: "Whether to skip automatic version bump (yes/no)"
         required: false
         default: "no"
+      skips_version_commit:
+        description: "Whether to skip the version commit (yes/no)"
+        required: false
+        default: "no"
       skips_publish:
         description: "Whether to skip publishing the release assets (yes/no)"
         required: false
@@ -23,10 +27,12 @@ jobs:
   publish-release_assets:
     name: Publish the release assets
     runs-on: ubuntu-latest
-    needs: [build-distrod_wsl_launcher]
+    needs: [build-distrod_wsl_launcher, bump-version]
 
     steps:
       - uses: actions/checkout@v2
+        with:
+          ref: ${{ needs.bump-version.outputs.tag }}
 
       - name: Get the arch name
         run: |
@@ -58,16 +64,16 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: assets/*
           file_glob: true
-          tag: ${{ steps.changelog.outputs.tag }}
+          tag: ${{ needs.bump-version.outputs.tag }}
           overwrite: true
           prerelease: ${{ github.event.inputs.is_prerelease == 'yes' }}
-          release_name: ${{ steps.changelog.outputs.tag }}
-          body: ${{ steps.changelog.outputs.clean_changelog }}
+          release_name: ${{ needs.bump-version.outputs.tag }}
+          body: ${{ needs.bump-version.outputs.clean_changelog }}
 
   build-distrod_wsl_launcher:
     name: Build Distrod WSL launcher
     runs-on: windows-latest
-    needs: [build-distrod-command]
+    needs: [build-distrod-command, bump-version]
 
     defaults:
       run:
@@ -75,6 +81,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+        with:
+          ref: ${{ needs.bump-version.outputs.tag }}
+
       - uses: actions/cache@v2
         with:
           path: |
@@ -112,6 +121,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+        with:
+          ref: ${{ needs.bump-version.outputs.tag }}
+
       - uses: actions/cache@v2
         with:
           path: |
@@ -162,6 +174,9 @@ jobs:
   bump-version:
     name: Bump the version
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.changelog.outputs.tag }}
+      clean_changelog: ${{ steps.changelog.outputs.clean_changelog }}
 
     steps:
       - uses: actions/checkout@v2
@@ -177,6 +192,7 @@ jobs:
           git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
           release-count: "0"
           skip-version-file: ${{ github.event.inputs.skips_version_bump == 'yes' }}
+          skip-commit: ${{ github.event.inputs.skips_version_commit == 'yes' }}
 
   build-portproxy-exe:
     name: Build portproxy.exe
