@@ -1,3 +1,12 @@
+## [0.1.6](https://github.com/nullpo-head/wsl-distrod/compare/v0.1.5...v0.1.6) (2022-07-06)
+
+
+### Bug Fixes
+
+* ci: Fix version command reported wrong version ([#58](https://github.com/nullpo-head/wsl-distrod/issues/58)) ([fd9bbdc](https://github.com/nullpo-head/wsl-distrod/commit/fd9bbdcce953b2660207aad2b59ec91ab210a621))
+
+
+
 ## [0.1.5](https://github.com/nullpo-head/wsl-distrod/compare/v0.1.4...v0.1.5) (2022-01-17)
 
 
