@@ -1,6 +1,6 @@
 [package]
 name = "distrod_wsl_launcher"
-version = "0.1.6"
+version = "0.1.7"
 authors = ["Takaya Saeki <tasaeki@microsoft.com>"]
 edition = "2018"
 

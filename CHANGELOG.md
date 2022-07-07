@@ -1,3 +1,12 @@
+## [0.1.7](https://github.com/nullpo-head/wsl-distrod/compare/v0.1.6...v0.1.7) (2022-07-07)
+
+
+### Bug Fixes
+
+* Bind mount `/tmp/.X11-unix` for newer version of WSL2 ([#57](https://github.com/nullpo-head/wsl-distrod/issues/57)) ([921bc3c](https://github.com/nullpo-head/wsl-distrod/commit/921bc3c2262aae4cd4656be800371bbbde5770eb)), closes [#56](https://github.com/nullpo-head/wsl-distrod/issues/56)
+
+
+
 ## [0.1.6](https://github.com/nullpo-head/wsl-distrod/compare/v0.1.5...v0.1.6) (2022-07-06)
 
 
