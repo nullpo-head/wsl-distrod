@@ -52,6 +52,12 @@ impl DistroLauncher {
             .with_context(|| "Failed to mount /run files.")?;
         prepend_distrod_bin_to_path(&mut distro_launcher)
             .with_context(|| "Failed to set the distrod bin dir in PATH.")?;
+
+        if is_wsl_bind_mount_dotx11_unix().unwrap() {
+            mount_dotx11_unix_for_wslg(&mut distro_launcher)
+                .with_context(|| "Failed to mount /tmp/.X11-unix for wslg")?;
+        }
+
         Ok(distro_launcher)
     }
 
@@ -255,6 +261,27 @@ fn mount_kernelcmdline_with_wsl_interop_envs_for_systemd(
     Ok(())
 }
 
+const X11_TARGET_PATH: &str = "/tmp/.X11-unix";
+const WSLG_PATH: &str = "/mnt/wslg/.X11-unix";
+
+fn is_wsl_bind_mount_dotx11_unix() -> Result<bool> {
+    // if it's an existing dir, then it's WSL>=0.60.0, we should bind-mount it
+    // otherwise, it's some older versions, waiting a symlink to be created later
+    Ok(Path::new(X11_TARGET_PATH).is_dir() && Path::new(WSLG_PATH).exists())
+}
+
+fn mount_dotx11_unix_for_wslg(distro_launcher: &mut DistroLauncher) -> Result<()> {
+    distro_launcher.with_mount(
+        Some(HostPath::new(WSLG_PATH)?),
+        ContainerPath::new(X11_TARGET_PATH)?,
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+        false,
+    );
+    Ok(())
+}
+
 fn get_cmdline_with_wsl_interop_envs_for_systemd<P: AsRef<Path>>(
     cmdline_path: P,
 ) -> Result<Vec<u8>> {
@@ -374,6 +401,18 @@ fn mount_slash_run_static_files(distro_launcher: &mut DistroLauncher) -> Result<
         if !path.is_file() {
             continue;
         }
+
+        // don't mount `x11.conf` for wsl>=0.60.0
+        if is_wsl_bind_mount_dotx11_unix().unwrap()
+            && path
+                == Path::new(&format!(
+                    "{}/tmpfiles.d/x11.conf",
+                    distrod_config::get_distrod_run_overlay_dir()
+                ))
+        {
+            continue;
+        }
+
         let dest_mount_path = ContainerPath::new(
             Path::new("/run").join(
                 path.strip_prefix(distrod_config::get_distrod_run_overlay_dir())

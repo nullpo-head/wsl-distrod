@@ -326,17 +326,19 @@ fn test_wslg_socket_is_available() {
     // Wait for a while until Systemd initializes /tmp
     std::thread::sleep(Duration::from_secs(15));
 
-    let mut test = DISTROD_SETUP.new_command();
-    test.args(&["exec", "--", "test", "-e", "/run/tmpfiles.d/x11.conf"]);
-    let child = test.status().unwrap();
-    assert!(child.success());
-
-    let mut ls = DISTROD_SETUP.new_command();
-    ls.args(&["exec", "--", "ls", "-ld", "/tmp/.X11-unix"]);
-    let output = ls.output().unwrap();
-    let output = String::from_utf8_lossy(&output.stdout);
-    eprintln!("output of `ls -ld /tmp/.X11-unix`: {}", output);
-    assert!(output.ends_with("-> /mnt/wslg/.X11-unix\n"));
+    // WSL prior to version 0.60.0 creates `/mnt/wslg/.X11-unix`, 
+    // so distrod will create a symbolic link to it in `/tmp/.X11-unix` using `tmpfiles.d`.
+    let mut test_wsl_before_0_60_0 = DISTROD_SETUP.new_command();
+    test_wsl_before_0_60_0.args(&["exec", "--", "test", "-e", "/run/tmpfiles.d/x11.conf"]);
+    let result_old = test_wsl_before_0_60_0.status().unwrap();
+    
+    // WSL bind-mounts `/tmp/.x11-unix` since 0.60.0. 
+    // Check `systemd-tmpfiles-setup.service.d` has the config to prevent systemd from cleaning it up.
+    let mut test_new = DISTROD_SETUP.new_command();
+    test_new.args(&["exec", "--", "test", "-e", "/run/systemd/system/systemd-tmpfiles-setup.service.d/exclude_wslg_sockets.conf"]);
+    let result_new = test_new.status().unwrap();
+    
+    assert!(result_old.success() || result_new.success());
 }
 
 #[test]
