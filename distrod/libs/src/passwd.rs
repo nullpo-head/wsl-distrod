@@ -68,18 +68,17 @@ impl Credential {
         })
     }
 
-    pub fn drop_privilege(&self) {
-        let inner = || -> Result<()> {
-            nix::unistd::setgroups(&self.groups)?;
-            nix::unistd::setresgid(self.gid, self.gid, self.gid)?;
-            nix::unistd::setresuid(self.uid, self.uid, self.uid)?;
+    pub fn try_drop_privilege(&self) -> Result<(), nix::Error> {
+        nix::unistd::setgroups(&self.groups)
+            .and(nix::unistd::setresgid(self.gid, self.gid, self.gid))
+            .and(nix::unistd::setresuid(self.uid, self.uid, self.uid))
+    }
 
-            Ok(())
-        };
-        if inner().is_err() {
+    pub fn drop_privilege(&self) {
+        if self.try_drop_privilege().is_err() {
             log::error!("Failed to drop_privilege. Aborting.");
             std::process::exit(1);
-        }
+        };
     }
 }
 
