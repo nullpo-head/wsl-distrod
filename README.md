@@ -102,13 +102,13 @@ By this installation, systemd is enabled in your WSL 2 distro.
    If you want to automatically start your distro on Windows startup, enable distrod by the following command
 
    ```bash
-   /opt/distrod/bin/distrod enable --start-on-windows-boot
+   sudo /opt/distrod/bin/distrod enable --start-on-windows-boot
    ```
 
    Otherwise,
 
    ```bash
-   /opt/distrod/bin/distrod enable
+   sudo /opt/distrod/bin/distrod enable
    ```
 
    You can run `enable` with `--start-on-windows-boot` again if you want to enable autostart later.
