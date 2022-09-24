@@ -1,12 +1,17 @@
 OUTPUT_ROOTFS_PATH ?= distrod/distrod_wsl_launcher/resources/distrod_root.tar.gz
 
-build: distrod-release
-
-rootfs: distrod-bins distrod/target/release/portproxy.exe
-	./distrod_packer/distrod_packer ./distrod $(OUTPUT_ROOTFS_PATH)
+## Make program and Linux opt_distrod.tar.gz release
+distrod: distrod-release
 
 distrod-release: distrod-bins distrod/target/release/portproxy.exe
 	./distrod_packer/distrod_packer ./distrod opt_distrod.tar.gz --pack-distrod-opt-dir
+
+## Make rootfs for installation from Windows
+rootfs: distrod-bins distrod/target/release/portproxy.exe
+	./distrod_packer/distrod_packer ./distrod $(OUTPUT_ROOTFS_PATH)
+
+## Make distrod and rootfs
+all: distrod rootfs
 
 distrod-bins:
 	cd distrod; cargo build --release -p distrod -p distrod-exec -p portproxy
@@ -28,11 +33,13 @@ integration-test-linux-all-distros:
 		 DISTRO_TO_TEST=$${distro} ./test_runner.sh run; \
 	done
 
+## Run tests on Linux
 test-linux: lint unit-test-linux integration-test-linux
 
 lint:
 	shellcheck install.sh
 
+## Remove build files
 clean:
 	cd distrod; cargo clean; cargo.exe clean
 
@@ -46,5 +53,8 @@ include windows.mk
 .PHONY: $(ROOTFS_PATH)
 endif
 
-.PHONY: build rootfs distrod-release distrod-bins lint clean\
+.PHONY: all distrod rootfs distrod-release distrod-bins lint clean\
         unit-test-linux enter-integration-test-linux integration-test-linux integration-test-linux-all-distros test-linux
+
+.DEFAULT_GOAL := help
+include .help.mk
