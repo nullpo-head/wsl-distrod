@@ -401,5 +401,10 @@ FodyWeavers.xsd
 
 ## Distrod
 
+# Old
 rootfs
 rootfs.tar.gz
+
+# Updated 2022-09-24
+opt_distrod.tar.gz
+distrod_root.tar.gz
