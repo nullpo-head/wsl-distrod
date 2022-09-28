@@ -4,19 +4,27 @@ set -e
 
 LATEST_RELEASE_URL="https://github.com/nullpo-head/wsl-distrod/releases/latest/download/opt_distrod.tar.gz"
 
-HELP_STR="Usage: $0 <command>
+help () {
+    cat <<-eof
+Usage: $0 [flags] <command>
+
+flags:
+    -r, --release-file <filename>    
+                      Use <filename> as opt_distrod.tar.gz instead of downloading from:
+                      $LATEST_RELEASE_URL
+    -h, --help
+                      Displays this help, the same as the help command
 
 command:
     - install
     - update
-    - uninstall"
-
-help () {
-    echo "$HELP_STR"
+    - uninstall
+    - help (this)
+eof
 }
 
 error_help () {
-    error "$HELP_STR"
+  error "$(help)"
 }
 
 install () {
@@ -77,34 +85,34 @@ error () {
     echo "$@" >&2
 }
 
-
 if [ -z "$1" ]; then
+    help
     error_help
     exit 1
 fi
 
-if [ "$(whoami)" != "root" ]; then
-    error "You must be root to run this script, please use sudo ./install.sh"
-    exit 1
-fi
+unset NEEDS_ROOT
 
 COMMAND=
 while [ -n "$1" ]; do
     case "$1" in
-    -h|--help)
-        echo "$HELP_STR"
-        exit 0
+    -h|--help|help)
+        COMMAND=help
+        break
         ;;
     install)
         COMMAND=install
+        NEEDS_ROOT=1
         shift
         ;;
     uninstall)
         COMMAND=uninstall
+        NEEDS_ROOT=1
         shift
         ;;
     update)
         COMMAND=update
+        NEEDS_ROOT=1
         shift
         ;;
     -r|--release-file)
@@ -121,5 +129,10 @@ while [ -n "$1" ]; do
         ;;
     esac
 done
+
+if [ -n "$NEEDS_ROOT" ] && [ "$(whoami)" != "root" ]; then
+    printf "You must be root to use the '${COMMAND}' command, please use 'sudo ${0} ${COMMAND}'\n"
+    exit 1
+fi
 
 "$COMMAND"
