@@ -36,6 +36,16 @@ lint:
 clean:
 	cd distrod; cargo clean; cargo.exe clean
 
+## Install locally built opt_distrod.tar.gz distrobution. Use 'update' if this system is already running distrod.
+install: build
+	sudo ./install.sh install --release-file ./opt_distrod.tar.gz
+.PHONY: install
+
+## Update local install with built opt_distrod.tar.gz distrobution. Use 'install' if this system doesn't have distrod installed.
+update: build
+	sudo ./install.sh update --release-file ./opt_distrod.tar.gz
+.PHONY: update
+
 ifneq ($(shell uname -a | grep microsoft),)  # This is a WSL environment, which means you can run .exe
 ROOTFS_PATH = $(OUTPUT_ROOTFS_PATH)
 OUTPUT_PORT_PROXY_EXE_PATH = distrod/target/release/portproxy.exe
