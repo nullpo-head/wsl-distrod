@@ -293,7 +293,7 @@ fn register_distribution<P: AsRef<Path>>(distro_name: &str, tar_gz_filename: P) 
             .arg("wsl")
             .arg("--import")
             .arg(distro_name)
-            .arg(format!("%LocalAppData%\\{}", distro_name))
+            .arg(format!("'%LocalAppData%'\\{}", distro_name))
             .arg(tar_gz_filename.as_ref());
         let mut child = cmd
             .spawn()
@@ -305,12 +305,12 @@ fn register_distribution<P: AsRef<Path>>(distro_name: &str, tar_gz_filename: P) 
             bail!(
                 "Failed: cmd.exe /C wsl --import {} {} {:#?}",
                 distro_name,
-                format!("%LocalAppData%\\{}", distro_name),
+                format!("'%LocalAppData%'\\{}", distro_name),
                 tar_gz_filename.as_ref()
             );
         }
         log::info!(
-            "{} is installed in %LocalAppData%\\{}",
+            "{} is installed in '%LocalAppData%'\\{}",
             distro_name,
             distro_name
         );
