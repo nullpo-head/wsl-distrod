@@ -37,12 +37,6 @@ With Distrod, you can
    - Distrod also provides a port proxy service managed by systemd,
      allowing you to expose your Linux server to the outside world of Windows easily.
 
-Feature under development
-
-1. **Make your dual-booted physical Linux distro on a separate disk run as a WSL instance.**
-
-[^1]: as long as your network connection is fast enough :)
-
 ## Install
 
 ### Option 1: Install a New Distro.
