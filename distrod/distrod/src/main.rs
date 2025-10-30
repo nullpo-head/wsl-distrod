@@ -202,7 +202,7 @@ fn enable_wsl_exec_hook(opts: EnableOpts) -> Result<()> {
     log::info!("Distrod has been enabled. Now your shell will start under systemd.");
     if opts.start_on_windows_boot {
         log::info!(
-            "Enabling atuomatic startup of Distrod. UAC dialog will appear because scheduling\n\
+            "Enabling automatic startup of Distrod. UAC dialog will appear because scheduling\n\
              a task requires the admin privilege. Please hit enter to proceed."
         );
         let mut buf = String::new();
