@@ -244,14 +244,13 @@ def make_distrod_distribution_dirs(work_dir: Path):
 def set_permissions(work_dir: Path):
     dir_to_back = os.getcwd()
     os.chdir(work_dir)
-    os.system("sudo chmod 755 .")
-    os.system("sudo chown -R root:root .")
+    os.system("chmod 755 .")
     os.chdir(dir_to_back)
 
 
 def set_suid(bin_path: Path):
-    os.system(f"sudo chmod u+s {bin_path}")
-    os.system(f"sudo chmod g+s {bin_path}")
+    os.system(f"chmod u+s {bin_path}")
+    os.system(f"chmod g+s {bin_path}")
 
 
 def copy_distrod_distribution_resources(work_dir: Path):
@@ -281,7 +280,7 @@ def run_cargo_about(workspace_path: Path, out_path: Path):
 def compress_entire_tree(tree: Path, output_path: Path):
     dir_to_back = os.getcwd()
     os.chdir(tree)
-    os.system("sudo tar czf compressed.tar.gz *")
+    os.system("tar --owner=root --group=root -czf compressed.tar.gz *")
     shutil.copy(tree.joinpath("compressed.tar.gz"), output_path)
     os.chdir(dir_to_back)
 
@@ -290,7 +289,7 @@ def make_dir_deletable(tree: Path):
     dir_to_back = os.getcwd()
     os.chdir(tree)
     # Let the directory able to be deleted
-    os.system("sudo chown -R $(whoami):$(whoami) .")
+    os.system("chown -R $(whoami):$(whoami) .")
     os.chdir(dir_to_back)
 
 
